@@ -186,7 +186,7 @@ absl::StatusOr<FilterParseResults> ParsePreFilter(
 absl::Status ParseKNN(query::VectorSearchParameters &parameters,
                       absl::string_view filter_str) {
   if (filter_str.empty()) {
-    return absl::InvalidArgumentError("Vector query clause is missing");
+    return absl::InvalidArgumentError("Vector query clause is missing1");
   }
   VMSDK_ASSIGN_OR_RETURN(auto close_position,
                          FindCloseSquareBracket(filter_str));
@@ -222,12 +222,12 @@ absl::Status Verify(query::VectorSearchParameters &parameters) {
            "exceed "
         << max_knn_value << ".";
   }
-  if (parameters.timeout_ms > kMaxTimeoutMs) {
+  if (parameters.timeout_ms > query::kMaxTimeoutMs) {
     return absl::InvalidArgumentError(
         absl::StrCat(kTimeoutParam,
                      " must be a positive integer greater than 0 and "
                      "cannot exceed ",
-                     kMaxTimeoutMs, "."));
+                     query::kMaxTimeoutMs, "."));
   }
   if (parameters.dialect < 2 || parameters.dialect > 4) {
     return absl::InvalidArgumentError(
@@ -350,9 +350,20 @@ vmsdk::KeyValueParser<query::VectorSearchParameters> CreateSearchParser() {
 static vmsdk::KeyValueParser<query::VectorSearchParameters> SearchParser =
     CreateSearchParser();
 
+}  // namespace
+
 absl::Status ParseQueryString(query::VectorSearchParameters &parameters) {
+  // Validate the query string's length.
+  if (parameters.parse_vars.query_string.length() >
+      options::GetQueryStringBytes()) {
+    return absl::InvalidArgumentError(
+        absl::StrCat("Query string is too long, max length is ",
+                     options::GetQueryStringBytes(), " bytes."));
+  }
   auto filter_expression =
       absl::string_view(parameters.parse_vars.query_string);
+  VMSDK_LOG(WARNING, nullptr)
+      << "Query: '" << parameters.parse_vars.query_string << "'";
   auto pos = filter_expression.find(kVectorFilterDelimiter);
   absl::string_view pre_filter;
   absl::string_view vector_filter;
@@ -369,7 +380,8 @@ absl::Status ParseQueryString(query::VectorSearchParameters &parameters) {
       parameters.filter_parse_results,
       ParsePreFilter(*parameters.index_schema, pre_filter),
       _.SetPrepend() << "Invalid filter expression: `" << pre_filter << "`. ");
-  if (!parameters.filter_parse_results.root_predicate && vector_filter.empty()) {
+  if (!parameters.filter_parse_results.root_predicate &&
+      vector_filter.empty()) {
     // Return an error if no valid pre-filter and no vector filter is provided.
     return absl::InvalidArgumentError("Vector query clause is missing");
   }
@@ -401,7 +413,6 @@ absl::Status ParseQueryString(query::VectorSearchParameters &parameters) {
   }
   return absl::OkStatus();
 }
-}  // namespace
 
 absl::StatusOr<std::unique_ptr<query::VectorSearchParameters>>
 ParseVectorSearchParameters(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
@@ -417,13 +428,6 @@ ParseVectorSearchParameters(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                                                parameters->index_schema_name));
   VMSDK_RETURN_IF_ERROR(
       vmsdk::ParseParamValue(itr, parameters->parse_vars.query_string));
-  // Validate the query string's length.
-  if (parameters->parse_vars.query_string.length() >
-      options::GetQueryStringBytes()) {
-    return absl::InvalidArgumentError(
-        absl::StrCat("Query string is too long, max length is ",
-                     options::GetQueryStringBytes(), " bytes."));
-  }
   VMSDK_RETURN_IF_ERROR(SearchParser.Parse(*parameters, itr));
   if (itr.DistanceEnd() > 0) {
     return absl::InvalidArgumentError(

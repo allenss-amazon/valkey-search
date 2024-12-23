@@ -138,6 +138,16 @@ do
     esac
 done
 
+# Capitalize a word. This method is compatible with bash-3 and bash-4
+function capitalize_string() {
+    local string=$1
+    local first_char=${string:0:1}
+    local remainder=${string:1}
+    first_char=$(echo "${first_char}" | tr '[:lower:]' '[:upper:]')
+    remainder=$(echo "${remainder}" | tr '[:upper:]' '[:lower:]')
+    echo ${first_char}${remainder}
+}
+
 function configure() {
     printf "${BOLD_PINK}Running cmake...${RESET}\n"
     mkdir -p ${BUILD_DIR}
@@ -247,7 +257,7 @@ function is_configure_required() {
         echo "yes"
         return
     fi
-    local build_file_lastmodified=$(get_file_last_modified ${ninja_build_file})
+    local build_file_lastmodified=$(date -r ${ninja_build_file} +%s)
     local cmake_files=$(find ${ROOT_DIR} -name "CMakeLists.txt" -o -name "*.cmake"| grep -v ".build-release" | grep -v ".build-debug")
     for cmake_file in ${cmake_files}; do
         local cmake_file_modified=$(date -r ${cmake_file} +%s)
