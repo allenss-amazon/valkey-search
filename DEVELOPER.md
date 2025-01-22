@@ -1,17 +1,35 @@
 # Developer Guide
 
 
-## Build
+## Build Environment Setup
 
-ValkeySearch is built using the Bazel build system.
+For development purposes, it is recommended to use <b>VSCode</b>, which is already configured to run within a Docker container and is integrated with clang-tidy and clang-format. Follow these steps to set up the environment:
 
-### Installing Bazelisk as Bazel
+1. <b>Install VSCode Extensions:</b>
+    - Install the `Dev Containers` extension by Microsoft in VSCode.
+    - Note: Building the code may take some time, and it is important to use a host with decent CPU capacity. If you prefer, you can use a remote host. In that case, also install the following extensions:
+      - `Remote - SSH` by Microsoft
+      - `Remote Explorer` by Microsoft
+2. <b>Open the Repository in VSCode:</b>
+    - On your local machine, open the root directory of the cloned valkey-search repository in VSCode.
+    - If the repository is located on a remote host:
+      1. Press Ctrl+Shift+P (Windows/Linux) or Cmd+Shift+P (macOS) to open the Command Palette.
+      2. Type Remote-SSH: Connect to Host and select it.
+      3. Choose the appropriate host and provide any necessary authentication details.
+    
+       Once connected, VSCode will open the repository in the context of the remote host.
 
-It is recommended to use [Bazelisk](https://github.com/bazelbuild/bazelisk) installed as `bazel`, to avoid Bazel compatibility issues.
+
+## Manual Setup of Build Environment
+
+If you prefer to manually set up the development environment instead of using the dev container, follow these steps. However, if you have already set up your environment to use the dev container, there’s no need to follow this section.
+
+valkey-search is built using the Bazel build system. It is recommended to use [Bazelisk](https://github.com/bazelbuild/bazelisk) installed as `bazel`, to avoid Bazel compatibility issues.
 
 On Linux, run the following commands:
 
 ```bash
+sudo apt update && sudo apt install ca-certificates -y && sudo update-ca-certificates
 sudo wget -O /usr/local/bin/bazel https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-$([ $(uname -m) = "aarch64" ] && echo "arm64" || echo "amd64")
 sudo chmod +x /usr/local/bin/bazel
 ```
@@ -28,7 +46,7 @@ Build requires `gcc/g++` version 11 or higher, and `glibc` to be available on th
 ```bash
 sudo apt update
 sudo apt upgrade
-sudo apt install libc6-dev gcc g++
+sudo apt install -y libc6-dev gcc g++
 
 # If your gcc version is below 11, continue with the following:
 # Add PPA to be able to newer gcc/g++ versions
@@ -36,7 +54,7 @@ sudo add-apt-repository ppa:ubuntu-toolchain-r/test
 sudo apt update
 
 # Install gcc-11 and g++-11
-sudo apt install gcc-11 g++-11
+sudo apt install -y gcc-11 g++-11
 
 # Set gcc-11 and g++-11 as the default compilers
 sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-11 100
@@ -165,18 +183,14 @@ To set up the necessary tools on a Debian-based distribution, follow these steps
 ```bash
 sudo bash -c "$(wget -O - https://apt.llvm.org/llvm.sh)"
 ```
-2. Capture the latest supported clang version by running:
 
+2. Install clang-tidy and related dependencies for your latest supported version:
 ```bash
-sudo update-alternatives --config clang
-```
-3. Install clang-tidy and related dependencies for your latest supported version:
-```bash
-sudo apt install clang-<version> clang++-<version>
-sudo update-alternatives --set clang /usr/bin/clang-<version>
-sudo update-alternatives --set clang++ /usr/bin/clang++-<version>
-sudo apt install libc++-<version>-dev libc++abi-<version>-dev clang-tidy-<version>
-sudo update-alternatives --install /usr/bin/clang-tidy clang-tidy /usr/bin/clang-tidy-<version> 100
+sudo apt install -y clang-16 clang++-16
+sudo update-alternatives --set clang /usr/bin/clang-16
+sudo update-alternatives --set clang++ /usr/bin/clang++-16
+sudo apt install libc++-16-dev libc++abi-16-dev clang-tidy-16
+sudo update-alternatives --install /usr/bin/clang-tidy clang-tidy /usr/bin/clang-tidy-16 100
 ```
 
 ### Running Clang-Tidy Locally
