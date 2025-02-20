@@ -1,4 +1,4 @@
-/*
+ /*
  * Copyright (c) 2025, valkey-search contributors
  * All rights reserved.
  * SPDX-License-Identifier: BSD 3-Clause
@@ -19,13 +19,6 @@
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace valkey_search {
-
-constexpr int64_t kTimeoutMS{50000};
-const size_t kMaxTimeoutMs{60000};
-
-namespace options {
-vmsdk::config::Number &GetMaxKnn();
-}  // namespace options
 
 struct LimitParameter {
   uint64_t first_index{0};

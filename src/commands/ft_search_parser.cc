@@ -222,12 +222,12 @@ absl::Status Verify(query::VectorSearchParameters &parameters) {
            "exceed "
         << max_knn_value << ".";
   }
-  if (parameters.timeout_ms > kMaxTimeoutMs) {
+  if (parameters.timeout_ms > query::kMaxTimeoutMs) {
     return absl::InvalidArgumentError(
         absl::StrCat(kTimeoutParam,
                      " must be a positive integer greater than 0 and "
                      "cannot exceed ",
-                     kMaxTimeoutMs, "."));
+                     query::kMaxTimeoutMs, "."));
   }
   if (parameters.dialect < 2 || parameters.dialect > 4) {
     return absl::InvalidArgumentError(
