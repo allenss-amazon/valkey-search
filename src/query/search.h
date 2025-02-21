@@ -51,6 +51,7 @@ struct ReturnAttribute {
 
 struct VectorSearchParameters {
   mutable cancel::Token cancellation_token;
+  virtual ~VectorSearchParameters() = default;
   std::shared_ptr<IndexSchema> index_schema;
   std::string index_schema_name;
   std::string attribute_alias;
