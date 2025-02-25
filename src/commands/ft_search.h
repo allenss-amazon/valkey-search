@@ -21,6 +21,7 @@ class ValkeySearch;
 // Declared here to support testing
 void SendReply(ValkeyModuleCtx *ctx, std::deque<indexes::Neighbor> &neighbors,
                const query::VectorSearchParameters &parameters);
+
 namespace async {
 
 struct Result {

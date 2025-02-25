@@ -72,6 +72,8 @@ struct VectorSearchParameters {
     // at the end of the parse to ensure no dangling pointers.
     absl::string_view query_string;
     absl::string_view score_as_string;
+    absl::string_view k_string;
+    absl::string_view blob_string;
     //
     // A Map of param names to values. The target of the map is a pair
     // that is the string of the value AND a reference count so that we can
@@ -83,7 +85,9 @@ struct VectorSearchParameters {
     void ClearAtEndOfParse() {
       query_string = absl::string_view();
       score_as_string = absl::string_view();
-      assert(params.empty());
+      k_string = absl::string_view();
+      blob_string = absl::string_view();
+      RedisModule_Assert(params.empty());
     }
   } parse_vars;
   bool IsNonVectorQuery() const {

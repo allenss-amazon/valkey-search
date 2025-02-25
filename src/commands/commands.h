@@ -37,6 +37,7 @@ constexpr absl::string_view kInfoCommand{"FT.INFO"};
 constexpr absl::string_view kListCommand{"FT._LIST"};
 constexpr absl::string_view kSearchCommand{"FT.SEARCH"};
 constexpr absl::string_view kDebugCommand{"FT._DEBUG"};
+constexpr absl::string_view kAggregateCommand{"FT.AGGREGATE"};
 
 const absl::flat_hash_set<absl::string_view> kCreateCmdPermissions{
     kSearchCategory, kWriteCategory, kFastCategory};
@@ -72,6 +73,8 @@ absl::Status FTSearchCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                          int argc);
 absl::Status FTDebugCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                          int argc);
+absl::Status FTAggregateCmd(RedisModuleCtx *ctx, RedisModuleString **argv,
+                            int argc);
 }  // namespace valkey_search
 
 #endif  // VALKEYSEARCH_SRC_COMMANDS_COMMANDS_H_
