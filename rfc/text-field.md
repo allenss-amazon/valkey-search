@@ -112,11 +112,7 @@ Here is a visual example. Note that in the drawing, the sections noted as "same 
 
 ### Search query operators
 
-<<<<<<< HEAD
 Unlike the Vector, Tag and Numeric search operators the specification of a field is optional. If the field specification is omitted then a match is declared if any text field matches the search operator.
-=======
-Unlike the Vector, Tag and Numeric search operators the specification of a field is optional for text search operators. If the field specification is omitted then a match is declared if any field matches the search operator.
->>>>>>> 52dd9a7 (Start of aggregate parsing)
 
 #### Term matching
 
@@ -127,13 +123,9 @@ Initially, only a single wildcard specifier ```*``` is allowed which matches any
 The wildcard can be at any position within the term, providing prefix, suffix and infix style matching.
 Note, in this proposal, the second prefix tree is required to perform infix and suffix matching.
 
-<<<<<<< HEAD
 #### Fuzzy matching
 
 Fuzzy word matching is specified by enclosing a word in pairs of percent signs ```%```. This term matches words within one [Levenshtein edit distance](https://en.wikipedia.org/wiki/Levenshtein_distance) edit distance for each pair of percent signs from the specified word. 
-=======
-Fuzzy matching is done using Levenshtein distances. A term enclosed in single percent signs ```%term%``` matches any term within a Levenshtein edit distance of one. Double percent signs ```%%term%%``` would match an edit distance of two, etc.
->>>>>>> 52dd9a7 (Start of aggregate parsing)
 
 #### Phrase matching
 
@@ -330,12 +322,8 @@ If supplied as part of an individual field declaration, i.e., after the ```SCHEM
 ```
 [PUNCTUATION <string>]
 ```
-<<<<<<< HEAD
 The characters of this string are used to split the input string into words. Note, the splitting process allows escaping of input characters using the usual backslash notation. This string cannot be empty. Default value is: _TBD_
 
-=======
-The characters of this string are used to split the input string into words. Note, the splitting process allows escaping of input characters using the usual backslash notation. This string cannot be empty. Default value is: ```,.<>{}[]"\':;!@#$%^&*()-+=~```
->>>>>>> 52dd9a7 (Start of aggregate parsing)
 
 ```
 [WITHSUFFIXTRIE | NOSUFFIXTRIE]
