@@ -86,6 +86,10 @@ int RunByMain(absl::AnyInvocable<void()> fn, bool force_async = false);
 
 std::string WrongArity(absl::string_view cmd);
 
+inline std::ostream &operator<<(std::ostream &os, ValkeyModuleString *s) {
+  return os << (*(std::string *)s);
+}
+
 //
 // Parse out a hash tag from a string view
 //

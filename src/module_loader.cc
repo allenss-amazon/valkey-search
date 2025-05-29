@@ -109,7 +109,7 @@ vmsdk::module::Options options = {
             {
                 .cmd_name = valkey_search::kAggregateCommand,
                 .permissions =
-                    ACLPermissionFormatter(valkey_search::kAggregateCmdPermissions),
+                    ACLPermissionFormatter(valkey_search::kSearchCmdPermissions),
                 .flags = {
                     vmsdk::module::kReadOnlyFlag,
                     vmsdk::module::kDenyOOMFlag
