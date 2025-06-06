@@ -11,6 +11,17 @@ VALKEY_JSON_VERSION="unstable"
 MODULE_ROOT=$(readlink -f ${ROOT_DIR}/../..)
 DUMP_TEST_ERRORS_STDOUT="no"
 
+# List of pytest-dependent test files
+PYTEST_TESTS=(
+    "compatibility"
+)
+
+# List of standalone test programs
+STANDALONE_TESTS=(
+    "stability_test"
+    "vector_search_integration_test"
+)
+
 # Constants
 BOLD_PINK='\e[35;1m'
 RESET='\e[0m'
@@ -29,7 +40,7 @@ Usage: test.sh [options...]
     --help | -h              Print this help message and exit.
     --clean                  Clean the current build configuration.
     --debug                  Build for debug version.
-    --test                   Specify the test name [stability|vector_search_integration]. Default all.
+    --test                   Specify the test name or 'all'. Default all.
     --test-errors-stdout     When a test fails, dump the captured tests output to stdout.
     --asan                   Build the ASan version of the module.
     --tsan                   Build the TSan version of the module.
@@ -80,15 +91,12 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-export SAN_BUILD
-
-# Source the common.rc after we setup our environment variables
-. ${WORKSPACE_HOME}/scripts/common.rc
-
-if [[ ! "${TEST}" == "stability" ]] && [[ ! "${TEST}" == "vector_search_integration" ]] && [[ ! "${TEST}" == "all" ]]; then
-    printf "\n${RED}Invalid test value: ${TEST}${RESET}\n\n" >&2
-    print_usage
-    exit 1
+if [[ "${TEST}" != "all" ]]; then
+    if [[ ! " ${PYTEST_TESTS[@]} ${STANDALONE_TESTS[@]} " =~ " ${TEST} " ]]; then
+        printf "\n${RED}Invalid test value: ${TEST}${RESET}\n\n" >&2
+        print_usage
+        exit 1
+    fi
 fi
 
 
@@ -209,22 +217,33 @@ print_environment_var TEST_TMPDIR ${TEST_TMPDIR}
 mkdir -p $TEST_TMPDIR
 pkill -9 valkey-server || true
 
-ALL_FILES="vector_search_integration_test.py stability_test.py"
+run_tests() {
+    if [[ "${TEST}" == "all" ]]; then
+        for test in "${PYTEST_TESTS[@]}" "${STANDALONE_TESTS[@]}"; do
+            run_single_test "$test"
+        done
+    else
+        run_single_test "${TEST}"
+    fi
+}
 
-if [[ "${TEST}" == "all" ]]; then
-    for file in $ALL_FILES; do
-        python3 ${ROOT_DIR}/${file}
-    done
+run_single_test() {
+    local test_name="$1"
+    local test_file="${test_name}.py"
+    if [[ " ${PYTEST_TESTS[@]} " =~ " ${test_name} " ]]; then
+        printf "${BOLD_PINK}Running pytest for ${test_file}...${RESET}\n"
+        pytest "${test_file}"
+    elif [[ " ${STANDALONE_TESTS[@]} " =~ " ${test_name} " ]]; then
+        printf "${BOLD_PINK}Running standalone test ${test_file}...${RESET}\n"
+        python3 "${test_file}"
+    else
+        printf "${RED}Unknown test: ${test_name}${RESET}\n"
+        exit 1
+    fi
+}
+
+if [[ "${DUMP_TEST_ERRORS_STDOUT}" == "yes" ]]; then
+    run_tests
 else
-    python3 ${ROOT_DIR}/${TEST}_test.py
-fi
-
-printf "Checking for errors...\n"
-if [[ "${SAN_BUILD}" != "no" ]]; then
-    # Terminate valkey-server so the logs will be flushed
-    pkill valkey-server || true
-    # Wait for 3 seconds making sure the processes terminated
-    sleep 3
-    # And now we can check the logs
-    check_for_san_errors "$(ls ${TEST_UNDECLARED_OUTPUTS_DIR}/*_stdout.txt | grep -v valkey_cli_stdout)"
+    run_tests
 fi
