@@ -180,6 +180,7 @@ void SendReply(ValkeyModuleCtx *ctx, std::deque<indexes::Neighbor> &neighbors,
   if (auto agg =
           dynamic_cast<const aggregate::AggregateParameters *>(&parameters)) {
     aggregate::SendReply(ctx, neighbors, *agg);
+    return;
   }
   // Increment success counter.
   ++Metrics::GetStats().query_successful_requests_cnt;
