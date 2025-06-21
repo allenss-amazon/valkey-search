@@ -2,17 +2,8 @@ cmake_minimum_required(VERSION 3.16)
 
 # Project definition
 
-project(
-  ValkeySearch
-  VERSION 1.0.0
-  LANGUAGES C CXX)
+project(ValkeySearch VERSION 1.0.0 LANGUAGES C CXX)
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake/Modules/")
-
-# This project can only compile macOS / Linux, we can use the UNIX predefined
-# variable to test this
-if(NOT UNIX)
-  message(FATAL_ERROR "valkey-search can only be built on Linux or macOS")
-endif()
 
 # Options
 option(BUILD_TESTS "Build valkey-search tests" ON)
@@ -23,10 +14,8 @@ set(SAN_BUILD "" CACHE STRING "Sanitizer to enable: 'address' or 'thread'")
 # Initialise submodules (gRPC, Protobuf, GTest & Abseil)
 add_subdirectory(submodules)
 
-if(SAN_BUILD STREQUAL "address" OR SAN_BUILD STREQUAL "thread")
-    message(STATUS "${SAN_BUILD} sanitizer is enabled")
-elseif(SAN_BUILD)
-    message(FATAL_ERROR "Supported sanitizers are 'address' or 'thread'")
+if(ASAN_BUILD)
+    message(STATUS "Address sanitizer is enabled")
 endif()
 
 message(STATUS "GRPC_CPP_PLUGIN_PATH is set to ${GRPC_CPP_PLUGIN_PATH}")
