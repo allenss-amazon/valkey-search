@@ -7,6 +7,7 @@
 
 #include "vmsdk/src/utils.h"
 
+#include <iomanip>
 #include <string>
 #include <utility>
 
@@ -145,6 +146,24 @@ absl::Status VerifyRange(long long num_value, std::optional<long long> min,
     return absl::OutOfRangeError("Invalid range: Value above maximum");
   }
   return absl::OkStatus();
+}
+
+std::ostream& operator<<(std::ostream& os, const JsonQuotedStringView& s) {
+  os << '"';
+  for (unsigned char c : s.view_) {
+    if (c == '"') {
+      os << '\\';
+      os << '"';
+    } else if (c == '\\') {
+      os << '\\';
+      os << '\\';
+    } else if (c <= 0x1F) {
+      os << "\\u" << std::hex << std::setfill('0') << std::setw(4) << int(c);
+    } else {
+      os << c;
+    }
+  }
+  return os << '"';
 }
 
 }  // namespace vmsdk
