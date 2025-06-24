@@ -106,9 +106,12 @@ size_t DisplayAsSIBytes(size_t value, char *buffer, size_t buffer_size);
 // skipped.
 absl::Status VerifyRange(long long num_value, std::optional<long long> min,
                          std::optional<long long> max);
+std::optional<std::string> JsonUnquote(absl::string_view sv);
+
 struct JsonQuotedStringView {
   absl::string_view view_;
-  friend std::ostream& operator<<(std::ostream& os, const JsonQuotedStringView& js);
+  friend std::ostream &operator<<(std::ostream &os,
+                                  const JsonQuotedStringView &js);
 };
 
 #define VMSDK_NON_COPYABLE(ClassName)              \
