@@ -142,10 +142,14 @@ TEST_F(UtilsTest, DisplayAsSIBytes) {
     bytes = DisplayAsSIBytes(value, buffer, 1);
     EXPECT_EQ(buffer[0], 0);
 <<<<<<< HEAD
+<<<<<<< HEAD
     EXPECT_EQ(buffer[1], '\xFF'); // untouched.
 =======
     EXPECT_EQ(buffer[1], '\xff'); // untouched.
 >>>>>>> a0e5275 (Fix DisplayAsSIBytes test (#216))
+=======
+    EXPECT_EQ(buffer[1], '\xFF'); // untouched.
+>>>>>>> 1a201c3 (Initial Wiring)
   }
 }
 
