@@ -6,15 +6,16 @@
  */
 
 #include "vmsdk/src/utils.h"
-#include "vmsdk/src/log.h"
 
 #include <string>
 #include <utility>
 
 #include "absl/functional/any_invocable.h"
 #include "absl/log/check.h"
+#include "absl/status/status.h"
 #include "absl/strings/str_cat.h"
 #include "absl/strings/string_view.h"
+#include "vmsdk/src/log.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace vmsdk {
@@ -133,6 +134,17 @@ size_t DisplayAsSIBytes(size_t bytes, char *buffer, size_t buffer_size) {
   } else {
     return snprintf(buffer, buffer_size, "%ld", bytes);
   }
+}
+
+absl::Status VerifyRange(long long num_value, std::optional<long long> min,
+                         std::optional<long long> max) {
+  if (min.has_value() && num_value < min.value()) {
+    return absl::OutOfRangeError("Invalid range: Value below minimum");
+  }
+  if (max.has_value() && max.value() < num_value) {
+    return absl::OutOfRangeError("Invalid range: Value above maximum");
+  }
+  return absl::OkStatus();
 }
 
 }  // namespace vmsdk
