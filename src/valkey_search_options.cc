@@ -162,6 +162,9 @@ static auto log_level =
         .WithValidationCallback(ValidateLogLevel)
         .Build();
 
+static auto enable_partial_results =
+    config::BooleanBuilder("enable-partial-results", false).Build();
+
 uint32_t GetQueryStringDepth() {
   return query_string_depth->GetValue();
 }
@@ -193,6 +196,10 @@ vmsdk::config::Enum& GetLogLevel() {
 absl::Status Reset() {
   VMSDK_RETURN_IF_ERROR(use_coordinator->SetValue(false));
   return absl::OkStatus();
+}
+
+const vmsdk::config::Boolean& GetEnablePartialResults() {
+  return static_cast<vmsdk::config::Boolean&>(*enable_partial_results);
 }
 
 }  // namespace options

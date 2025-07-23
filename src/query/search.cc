@@ -202,6 +202,9 @@ CalcBestMatchingPrefilteredKeys(
                                         results, top_keys);
       }
       iterator->Next();
+      if (parameters.cancellation_token->IsCancelled()) {
+        return results; 
+      }
     }
   }
   return results;
@@ -354,6 +357,7 @@ absl::StatusOr<std::deque<indexes::Neighbor>> Search(
         << "Using pre-filter query execution, qualified entries="
         << qualified_entries;
     // Do an exact nearest neighbour search on the reduced search space.
+    ++Metrics::GetStats().query_prefiltering_requests_cnt;
     auto results = CalcBestMatchingPrefilteredKeys(
         parameters, entries_fetchers, vector_index);
 
