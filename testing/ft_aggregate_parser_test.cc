@@ -11,7 +11,7 @@
 #include "gtest/gtest.h"
 #include "vmsdk/src/testing_infra/utils.h"
 
-std::ostream &operator<<(std::ostream &os, RedisModuleString *s) {
+std::ostream &operator<<(std::ostream &os, ValkeyModuleString *s) {
   return os << "S=" << *(std::string *)s;
 }
 
@@ -138,7 +138,7 @@ static void DoPrefaceTestCase(FakeIndexInterface *fake_index, std::string test,
   }
   // Need to manually free the string vector
   for (auto arg : argv) {
-    RedisModule_FreeString(nullptr, arg);
+    ValkeyModule_FreeString(nullptr, arg);
   }
 }
 
@@ -241,7 +241,7 @@ static void DoStageTest(FakeIndexInterface *fake_index,
   }
   // Need to manually free the string vector
   for (auto arg : argv) {
-    RedisModule_FreeString(nullptr, arg);
+    ValkeyModule_FreeString(nullptr, arg);
   }
 }
 

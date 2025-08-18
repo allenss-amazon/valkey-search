@@ -119,7 +119,7 @@ template <Value (*func1)(const Value& o)>
 Value MonadicFunctionProxy(
     Expression::EvalContext& ctx, const Expression::Record& record,
     const absl::InlinedVector<expr::ExprPtr, 4>& params) {
-  RedisModule_Assert(params.size() == 1);
+  CHECK(params.size() == 1);
   return (*func1)(params[0]->Evaluate(ctx, record));
 };
 
@@ -127,7 +127,7 @@ template <Value (*func2)(const Value& l, const Value& r)>
 Value DyadicFunctionProxy(Expression::EvalContext& ctx,
                           const Expression::Record& record,
                           const absl::InlinedVector<expr::ExprPtr, 4>& params) {
-  RedisModule_Assert(params.size() == 2);
+  CHECK(params.size() == 2);
   return (*func2)(params[0]->Evaluate(ctx, record),
                   params[1]->Evaluate(ctx, record));
 };
@@ -136,7 +136,7 @@ template <Value (*func3)(const Value& l, const Value& m, const Value& r)>
 Value TriadicFunctionProxy(
     Expression::EvalContext& ctx, const Expression::Record& record,
     const absl::InlinedVector<expr::ExprPtr, 4>& params) {
-  RedisModule_Assert(params.size() == 3);
+  CHECK(params.size() == 3);
   return (*func3)(params[0]->Evaluate(ctx, record),
                   params[1]->Evaluate(ctx, record),
                   params[2]->Evaluate(ctx, record));
@@ -161,7 +161,7 @@ Value ProxyConcat(Expression::EvalContext& ctx,
 Value ProxyTimefmt(Expression::EvalContext& ctx,
                    const Expression::Record& record,
                    const absl::InlinedVector<expr::ExprPtr, 4>& params) {
-  RedisModule_Assert(!params.empty());
+  CHECK(!params.empty());
   Value fmt("%FT%TZ");
   if (params.size() > 1) {
     fmt = params[1]->Evaluate(ctx, record);
@@ -172,7 +172,7 @@ Value ProxyTimefmt(Expression::EvalContext& ctx,
 Value ProxyParsetime(Expression::EvalContext& ctx,
                      const Expression::Record& record,
                      const absl::InlinedVector<expr::ExprPtr, 4>& params) {
-  RedisModule_Assert(!params.empty());
+  CHECK(!params.empty());
   Value fmt("%FT%TZ");
   if (params.size() > 1) {
     fmt = params[1]->Evaluate(ctx, record);
@@ -332,7 +332,7 @@ struct Compiler {
   }
 
   absl::StatusOr<ExprPtr> ParseParameter(CompileContext& ctx) {
-    RedisModule_Assert(s_.PopByte('$'));
+    CHECK(s_.PopByte('$'));
     std::string param_name;
     while (IsIdentifierChar(s_.PeekByte())) {
       param_name += s_.NextByte();
@@ -343,7 +343,7 @@ struct Compiler {
   }
 
   absl::StatusOr<ExprPtr> Invert(CompileContext& ctx) {
-    RedisModule_Assert(s_.PopByte('!'));
+    CHECK(s_.PopByte('!'));
     VMSDK_ASSIGN_OR_RETURN(auto expr, Primary(ctx));
     return std::make_unique<Not>(std::move(expr));
   }
@@ -353,7 +353,7 @@ struct Compiler {
     DBG << "Primary: '" << s_.GetUnscanned() << "'\n";
     switch (s_.PeekByte()) {
       case '(': {
-        RedisModule_Assert(s_.PopByte('('));
+        CHECK(s_.PopByte('('));
         auto result = LorOp(ctx);
         if (!s_.SkipWhiteSpacePopByte(')')) {
           return absl::InvalidArgumentError(absl::StrCat(
@@ -393,7 +393,7 @@ struct Compiler {
     }
   }
   absl::StatusOr<ExprPtr> Attribute(CompileContext& ctx) {
-    RedisModule_Assert(s_.PopByte('@'));
+    CHECK(s_.PopByte('@'));
     size_t pos = s_.GetPosition();
     std::string identifier;
     while (IsIdentifierChar(s_.PeekUtf8())) {
@@ -468,7 +468,7 @@ struct Compiler {
       }
       str.push_back(char(this_byte));
     }
-    RedisModule_Assert(s_.PopByte(start_byte));
+    CHECK(s_.PopByte(start_byte));
     DBG << "QuotedString('" << str << "'): Remaining:'" << s_.GetUnscanned()
         << "'\n";
     return std::make_unique<Constant>(std::move(str));

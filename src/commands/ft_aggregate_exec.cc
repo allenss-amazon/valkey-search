@@ -163,7 +163,7 @@ absl::Status GroupBy::Execute(RecordSet& records) const {
     if (record_field_count == 0) {
       record_field_count = record->fields_.size();
     } else {
-      RedisModule_Assert(record_field_count == record->fields_.size());
+      CHECK(record_field_count == record->fields_.size());
     }
     GroupKey k;
     // todo: How do we handle keys that have a missing attribute in the key??
@@ -190,11 +190,11 @@ absl::Status GroupBy::Execute(RecordSet& records) const {
   for (auto& group : groups) {
     DBG << "Making record for group " << group.first << "\n";
     RecordPtr record = std::make_unique<Record>(record_field_count);
-    RedisModule_Assert(groups_.size() == group.first.keys_.size());
+    CHECK(groups_.size() == group.first.keys_.size());
     for (auto i = 0; i < groups_.size(); ++i) {
       SetField(*record, *groups_[i], group.first.keys_[i]);
     }
-    RedisModule_Assert(reducers_.size() == group.second.size());
+    CHECK(reducers_.size() == group.second.size());
     for (auto i = 0; i < reducers_.size(); ++i) {
       SetField(*record, *reducers_[i].output_, group.second[i]->GetResult());
     }

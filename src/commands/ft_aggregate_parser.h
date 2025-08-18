@@ -256,7 +256,7 @@ class SortBy : public Stage {
           os << " DESC:";
           break;
         default:
-          RedisModule_Assert(false);
+          CHECK(false);
       }
       os << k.expr_.get();
     }
@@ -267,7 +267,7 @@ class SortBy : public Stage {
 };
 
 absl::StatusOr<std::unique_ptr<AggregateParameters>> ParseAggregateParameters(
-    RedisModuleCtx* ctx, RedisModuleString** argv, int argc,
+    ValkeyModuleCtx* ctx, ValkeyModuleString** argv, int argc,
     const SchemaManager& schema_manager);
 
 //

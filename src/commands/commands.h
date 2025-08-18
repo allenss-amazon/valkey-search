@@ -52,7 +52,6 @@ const absl::flat_hash_set<absl::string_view> kListCmdPermissions{
 const absl::flat_hash_set<absl::string_view> kDebugCmdPermissions{
     kSearchCategory, kReadCategory, kSlowCategory, kAdminCategory};
 
-
 inline absl::flat_hash_set<absl::string_view> PrefixACLPermissions(
     const absl::flat_hash_set<absl::string_view> &cmd_permissions,
     absl::string_view command) {
@@ -72,8 +71,8 @@ absl::Status FTListCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
 absl::Status FTSearchCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                          int argc);
 absl::Status FTDebugCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
-                         int argc);
-absl::Status FTAggregateCmd(RedisModuleCtx *ctx, RedisModuleString **argv,
+                        int argc);
+absl::Status FTAggregateCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                             int argc);
 }  // namespace valkey_search
 

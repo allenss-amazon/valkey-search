@@ -40,7 +40,7 @@ The query facility of the ```FT.SEARCH``` and ```FT.AGGREGATE``` commands is enh
 ### Tokenization process
 
 A tokenization process is applied to strings of text to produce a vector of terms.
-Tokenization is applied in two contexts. 
+Tokensization is applied in two contexts. 
 First as part of the ingestion process for text fields of keys.
 Second to process query string words and phrases.
 
@@ -116,7 +116,7 @@ Unlike the Vector, Tag and Numeric search operators the specification of a field
 
 #### Term matching
 
-There are three types of term matching: exact, wildcard and fuzzy. Exact matching is self-descriptive, i.e., only keys containing exactly the specified terms are matched. 
+There are three types of term matching: exact, wildcard and fuzzy. Exact term matching is self-descriptive, i.e., only keys containing exactly the specified text are matched.
 
 Wildcard matching provides a subset of reg-ex style matching of terms.
 Initially, only a single wildcard specifier ```*``` is allowed which matches any number of characters in a term.
@@ -390,31 +390,3 @@ To avoid combinatorial explosion certain operations have configurable limits app
 ### Dependencies
 
 snowball library https://snowballstem.org/ and https://github.com/snowballstem
-
-### Omissions from Redisearch
-
-Items not proposed to be supported by the FT.SEARCH and/or FT.AGGREGATE commands:
-
-* BM-25 scoring
-* Query attributes: Slop, Weight, Inorder, phonetic
-* WITHPAYLOADS
-* FILTER
-* GEOFILTER
-* INKEYS
-* INFIELDS
-* SUMMARIZE
-* HIGHLIGHT
-* SLOP
-* INORDER
-* EXPANDER
-* EXPLAINSCORE
-* PAYLOAD
-
-Items not proposed to be supported by the FT.CREATE commands:
-
-* SCORE
-* SCORE_FIELD
-* PAYLOAD_FIELD
-* NOFREQS
-* SKIPINITIALSCAN
-

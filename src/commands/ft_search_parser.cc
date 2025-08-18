@@ -106,7 +106,8 @@ absl::Status ParseKnnInner(query::VectorSearchParameters &parameters,
   if (params.size() == 1) {
     return absl::InvalidArgumentError("KNN argument is missing");
   }
-  parameters.parse_vars.k_string = params[1];
+  VMSDK_ASSIGN_OR_RETURN(auto k_string, SubstituteParam(parameters, params[1]));
+  VMSDK_ASSIGN_OR_RETURN(parameters.k, vmsdk::To<unsigned>(k_string));
   if (params.size() == 2) {
     return absl::InvalidArgumentError("Vector field argument is missing");
   }
@@ -120,7 +121,8 @@ absl::Status ParseKnnInner(query::VectorSearchParameters &parameters,
   if (params.size() == 3) {
     return absl::InvalidArgumentError("Blob attribute argument is missing");
   }
-  parameters.parse_vars.blob_string = params[3];
+  VMSDK_ASSIGN_OR_RETURN(parameters.query,
+                         SubstituteParam(parameters, params[3]));
   size_t i = 4;
   while (i < params.size()) {
     if (absl::EqualsIgnoreCase(params[i], "EF_RUNTIME")) {
@@ -232,6 +234,15 @@ absl::Status Verify(query::VectorSearchParameters &parameters) {
         "DIALECT requires a non negative integer >=2 and <= 4");
   }
 
+  // Validate all parameters used, nuke the map to avoid dangling pointers
+  while (!parameters.parse_vars.params.empty()) {
+    auto begin = parameters.parse_vars.params.begin();
+    if (begin->second.first == 0) {
+      return absl::NotFoundError(
+          absl::StrCat("Parameter `", begin->first, "` not used."));
+    }
+    parameters.parse_vars.params.erase(begin);
+  }
   return absl::OkStatus();
 }
 
@@ -360,7 +371,8 @@ absl::Status PreParseQueryString(query::VectorSearchParameters &parameters) {
       parameters.filter_parse_results,
       ParsePreFilter(*parameters.index_schema, pre_filter),
       _.SetPrepend() << "Invalid filter expression: `" << pre_filter << "`. ");
-  if (!parameters.filter_parse_results.root_predicate && vector_filter.empty()) {
+  if (!parameters.filter_parse_results.root_predicate &&
+      vector_filter.empty()) {
     // Return an error if no valid pre-filter and no vector filter is provided.
     return absl::InvalidArgumentError("Vector query clause is missing");
   }

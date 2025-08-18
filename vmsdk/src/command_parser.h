@@ -54,7 +54,7 @@ class ArgsIterator {
     return *this;
   }
 
-  absl::StatusOr<RedisModuleString *> PopNext(int steps = 1) {
+  absl::StatusOr<ValkeyModuleString *> PopNext(int steps = 1) {
     VMSDK_ASSIGN_OR_RETURN(auto current, Get());
     Next(steps);
     return current;
@@ -62,10 +62,11 @@ class ArgsIterator {
 
   bool PopIfNextIgnoreCase(absl::string_view word) {
     auto next = Get();
-    if (!next.ok() || !absl::EqualsIgnoreCase(vmsdk::ToStringView(next.value()), word)) {
+    if (!next.ok() ||
+        !absl::EqualsIgnoreCase(vmsdk::ToStringView(next.value()), word)) {
       return false;
     } else {
-      itr_ ++;
+      itr_++;
       return true;
     }
   }

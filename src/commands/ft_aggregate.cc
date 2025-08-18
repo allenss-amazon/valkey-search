@@ -51,10 +51,10 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
   // operation. And modify the common search returns list accordingly
   DBG << "Manipulating returns clause for: " << params.index_schema_name
       << "\n";
-  RedisModule_Assert(!params.no_content);
+  CHECK(!params.no_content);
   if (params.loadall_) {
     DBG << "**LOADALL**\n";
-    RedisModule_Assert(params.return_attributes.empty());
+    CHECK(params.return_attributes.empty());
   } else if (params.loads_.empty()) {
     // Nothing, don't load anything
     params.no_content = true;
@@ -80,16 +80,16 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
       if (schema_identifier.ok()) {
         DBG << " (alias: " << *schema_identifier << ", " << load << ")";
         params.return_attributes.emplace_back(query::ReturnAttribute{
-            .identifier = vmsdk::MakeUniqueRedisString(*schema_identifier),
-            .attribute_alias = vmsdk::MakeUniqueRedisString(load),
-            .alias = vmsdk::MakeUniqueRedisString(load)});
+            .identifier = vmsdk::MakeUniqueValkeyString(*schema_identifier),
+            .attribute_alias = vmsdk::MakeUniqueValkeyString(load),
+            .alias = vmsdk::MakeUniqueValkeyString(load)});
         params.AddRecordAttribute(*schema_identifier, load, field_type);
       } else {
         DBG << " " << load;
         params.return_attributes.emplace_back(query::ReturnAttribute{
-            .identifier = vmsdk::MakeUniqueRedisString(load),
+            .identifier = vmsdk::MakeUniqueValkeyString(load),
             .attribute_alias = vmsdk::UniqueRedisString(),
-            .alias = vmsdk::MakeUniqueRedisString(load)});
+            .alias = vmsdk::MakeUniqueValkeyString(load)});
         params.AddRecordAttribute(load, load, indexes::IndexerType::kNone);
       }
     }
@@ -99,7 +99,7 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
 }
 
 absl::StatusOr<std::unique_ptr<AggregateParameters>> ParseCommand(
-    RedisModuleCtx *ctx, RedisModuleString **argv, int argc,
+    ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc,
     const SchemaManager &schema_manager) {
   static vmsdk::KeyValueParser<AggregateParameters> parser =
       CreateAggregateParser();
@@ -108,7 +108,7 @@ absl::StatusOr<std::unique_ptr<AggregateParameters>> ParseCommand(
   VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, index_schema_name));
   VMSDK_ASSIGN_OR_RETURN(
       auto index_schema,
-      SchemaManager::Instance().GetIndexSchema(RedisModule_GetSelectedDb(ctx),
+      SchemaManager::Instance().GetIndexSchema(ValkeyModule_GetSelectedDb(ctx),
                                                index_schema_name));
   RealIndexInterface index_interface(index_schema);
   auto params = std::make_unique<AggregateParameters>(&index_interface);
@@ -122,11 +122,11 @@ absl::StatusOr<std::unique_ptr<AggregateParameters>> ParseCommand(
   VMSDK_RETURN_IF_ERROR(PreParseQueryString(*params));
 
   // Ensure that key is first value if it gets included...
-  RedisModule_Assert(params->AddRecordAttribute(
-                         "__key", "__key", indexes::IndexerType::kNone) == 0);
+  CHECK(params->AddRecordAttribute("__key", "__key",
+                                   indexes::IndexerType::kNone) == 0);
   auto score_sv = vmsdk::ToStringView(params->score_as.get());
-  RedisModule_Assert(params->AddRecordAttribute(
-                         score_sv, score_sv, indexes::IndexerType::kNone) == 1);
+  CHECK(params->AddRecordAttribute(score_sv, score_sv,
+                                   indexes::IndexerType::kNone) == 1);
 
   VMSDK_RETURN_IF_ERROR(parser.Parse(*params, itr, true));
   if (itr.DistanceEnd() > 0) {
@@ -151,7 +151,7 @@ absl::StatusOr<std::unique_ptr<AggregateParameters>> ParseCommand(
   return std::move(params);
 }
 
-bool ReplyWithValue(RedisModuleCtx *ctx,
+bool ReplyWithValue(ValkeyModuleCtx *ctx,
                     data_model::AttributeDataType data_type,
                     std::string_view name, indexes::IndexerType field_type,
                     const expr::Value &value, int dialect) {
@@ -159,9 +159,9 @@ bool ReplyWithValue(RedisModuleCtx *ctx,
     return false;
   } else {
     if (data_type == data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_HASH) {
-      RedisModule_ReplyWithSimpleString(ctx, name.data());
+      ValkeyModule_ReplyWithSimpleString(ctx, name.data());
       auto value_sv = value.AsStringView();
-      RedisModule_ReplyWithStringBuffer(ctx, value_sv.data(), value_sv.size());
+      ValkeyModule_ReplyWithStringBuffer(ctx, value_sv.data(), value_sv.size());
       DBG << "HASH: " << name << ":" << value_sv << "\n";
     } else {
       DBG << "ReplyWithValue " << name << "\n";
@@ -169,7 +169,7 @@ bool ReplyWithValue(RedisModuleCtx *ctx,
       if (name == "$") {
         DBG << "Overriding for field name of $ " << int(field_type) << "\n";
         DBG << "Input: " << value.AsStringView() << "\n";
-        RedisModule_ReplyWithSimpleString(ctx, name.data());
+        ValkeyModule_ReplyWithSimpleString(ctx, name.data());
         if (dialect == 2) {
           ss << value.AsStringView();
         } else {
@@ -179,7 +179,7 @@ bool ReplyWithValue(RedisModuleCtx *ctx,
         switch (field_type) {
           case indexes::IndexerType::kNone:
             DBG << "kNone: " << value.AsStringView() << "\n";
-            RedisModule_ReplyWithSimpleString(ctx, name.data());
+            ValkeyModule_ReplyWithSimpleString(ctx, name.data());
             ss << value.AsStringView();
             break;
           case indexes::IndexerType::kNumeric: {
@@ -187,7 +187,7 @@ bool ReplyWithValue(RedisModuleCtx *ctx,
             if (!dble) {
               return false;
             }
-            RedisModule_ReplyWithSimpleString(ctx, name.data());
+            ValkeyModule_ReplyWithSimpleString(ctx, name.data());
             DBG << "kNumeric: " << *dble << "\n";
             if (dialect == 2) {
               ss << *dble;
@@ -199,7 +199,7 @@ bool ReplyWithValue(RedisModuleCtx *ctx,
           case indexes::IndexerType::kTag:
             DBG << "kTag: " << value.AsStringView() << "\n";
             // Todo: Handle Escaped Characters
-            RedisModule_ReplyWithSimpleString(ctx, name.data());
+            ValkeyModule_ReplyWithSimpleString(ctx, name.data());
             if (dialect == 2) {
               ss << value.AsStringView();
             } else {
@@ -215,13 +215,13 @@ bool ReplyWithValue(RedisModuleCtx *ctx,
       }
       std::string s = ss.str();
       DBG << "JSON: " << name << ":" << s << "\n";
-      RedisModule_ReplyWithStringBuffer(ctx, s.data(), s.size());
+      ValkeyModule_ReplyWithStringBuffer(ctx, s.data(), s.size());
     }
   }
   return true;
 }
 
-absl::Status SendReplyInner(RedisModuleCtx *ctx,
+absl::Status SendReplyInner(ValkeyModuleCtx *ctx,
                             std::deque<indexes::Neighbor> &neighbors,
                             AggregateParameters &parameters) {
   auto identifier =
@@ -344,17 +344,16 @@ absl::Status SendReplyInner(RedisModuleCtx *ctx,
   //
   //  3. Generate the result
   //
-  RedisModule_ReplyWithArray(ctx, 1 + records.size());
-  RedisModule_ReplyWithLongLong(ctx, static_cast<long long>(records.size()));
+  ValkeyModule_ReplyWithArray(ctx, 1 + records.size());
+  ValkeyModule_ReplyWithLongLong(ctx, static_cast<long long>(records.size()));
   while (!records.empty()) {
     auto rec = records.pop_front();
-    RedisModule_ReplyWithArray(ctx, REDISMODULE_POSTPONED_ARRAY_LEN);
+    ValkeyModule_ReplyWithArray(ctx, REDISMODULE_POSTPONED_ARRAY_LEN);
     //
     // First the referenced fields
     //
     size_t array_count = 0;
-    RedisModule_Assert(rec->fields_.size() <=
-                       parameters.record_info_by_index_.size());
+    CHECK(rec->fields_.size() <= parameters.record_info_by_index_.size());
     for (size_t i = 0; i < rec->fields_.size(); ++i) {
       if (ReplyWithValue(
               ctx, parameters.index_schema->GetAttributeDataType().ToProto(),
@@ -375,25 +374,25 @@ absl::Status SendReplyInner(RedisModuleCtx *ctx,
       }
     }
     DBG << " (Total length) " << array_count << "\n";
-    RedisModule_ReplySetArrayLength(ctx, array_count);
+    ValkeyModule_ReplySetArrayLength(ctx, array_count);
   }
   return absl::OkStatus();
 }
 
-void SendReply(RedisModuleCtx *ctx, std::deque<indexes::Neighbor> &neighbors,
+void SendReply(ValkeyModuleCtx *ctx, std::deque<indexes::Neighbor> &neighbors,
                AggregateParameters &parameters) {
   auto identifier =
       parameters.index_schema->GetIdentifier(parameters.attribute_alias);
   auto result = SendReplyInner(ctx, neighbors, parameters);
   if (!result.ok()) {
     ++Metrics::GetStats().query_failed_requests_cnt;
-    RedisModule_ReplyWithError(ctx, result.message().data());
+    ValkeyModule_ReplyWithError(ctx, result.message().data());
   }
 }
 
 }  // namespace aggregate
 
-absl::Status FTAggregateCmd(RedisModuleCtx *ctx, RedisModuleString **argv,
+absl::Status FTAggregateCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                             int argc) {
   auto status = [&]() {
     auto &schema_manager = SchemaManager::Instance();
@@ -402,7 +401,7 @@ absl::Status FTAggregateCmd(RedisModuleCtx *ctx, RedisModuleString **argv,
         aggregate::ParseCommand(ctx, argv + 1, argc - 1, schema_manager));
     parameters->index_schema->ProcessMultiQueue();
     bool inside_multi =
-        (RedisModule_GetContextFlags(ctx) & REDISMODULE_CTX_FLAGS_MULTI) != 0;
+        (ValkeyModule_GetContextFlags(ctx) & REDISMODULE_CTX_FLAGS_MULTI) != 0;
     if (ABSL_PREDICT_FALSE(!ValkeySearch::Instance().SupportParallelQueries() ||
                            inside_multi)) {
       VMSDK_ASSIGN_OR_RETURN(auto neighbors, query::Search(*parameters, true));
@@ -433,7 +432,7 @@ absl::Status FTAggregateCmd(RedisModuleCtx *ctx, RedisModuleString **argv,
     return query::SearchAsync(std::move(parameters),
                               ValkeySearch::Instance().GetReaderThreadPool(),
                               std::move(on_done_callback), true);
-    RedisModule_Assert(false);
+    CHECK(false);
   }();
   if (!status.ok()) {
     ++Metrics::GetStats().query_failed_requests_cnt;

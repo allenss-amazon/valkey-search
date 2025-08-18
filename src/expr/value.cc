@@ -142,7 +142,7 @@ absl::string_view Value::AsStringView() const {
   } else if (auto result = std::get_if<std::string>(&value_)) {
     return *result;
   } else {
-    RedisModule_Assert(false);
+    CHECK(false);
   }
 }
 
@@ -156,7 +156,7 @@ std::string Value::AsString() const {
   } else if (auto result = std::get_if<std::string>(&value_)) {
     return *result;
   } else {
-    RedisModule_Assert(false);
+    CHECK(false);
   }
 }
 
@@ -171,7 +171,7 @@ std::ostream& operator<<(std::ostream& os, const Value& v) {
   } else if (v.IsString()) {
     return os << "'" << v.AsStringView() << "'";
   }
-  RedisModule_Assert(false);
+  CHECK(false);
 }
 
 static Ordering CompareDoubles(double l, double r) {

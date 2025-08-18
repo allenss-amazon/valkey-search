@@ -36,6 +36,8 @@ namespace valkey_search::query {
 
 constexpr int64_t kTimeoutMS{50000};
 constexpr size_t kMaxTimeoutMs{60000};
+constexpr absl::string_view kOOMMsg{
+    "OOM command not allowed when used memory > 'maxmemory'"};
 constexpr uint32_t kDialect{2};
 
 struct LimitParameter {
@@ -95,14 +97,13 @@ struct VectorSearchParameters {
       score_as_string = absl::string_view();
       k_string = absl::string_view();
       blob_string = absl::string_view();
-      RedisModule_Assert(params.empty());
+      CHECK(params.empty());
     }
   } parse_vars;
-  bool IsNonVectorQuery() const {
-    return attribute_alias.empty();
-  }
-  VectorSearchParameters(uint64_t timeout, grpc::CallbackServerContext *context)
-      : timeout_ms(timeout), cancellation_token(cancel::Make(timeout, context)) {}
+  bool IsNonVectorQuery() const { return attribute_alias.empty(); }
+  VectorSearchParameters(uint64_t timeout, grpc::CallbackServerContext* context)
+      : timeout_ms(timeout),
+        cancellation_token(cancel::Make(timeout, context)) {}
 };
 
 // Callback to be called when the search is done.
