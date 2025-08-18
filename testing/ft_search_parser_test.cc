@@ -68,6 +68,7 @@ struct FTSearchParserTestCase {
   bool no_content{false};
   std::string search_parameters_str;
   uint64_t timeout_ms{query::kTimeoutMS};
+  bool vector_query{true};
 };
 
 class FTSearchParserTest

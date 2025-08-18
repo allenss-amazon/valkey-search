@@ -352,7 +352,7 @@ static vmsdk::KeyValueParser<query::VectorSearchParameters> SearchParser =
 
 }  // namespace
 
-absl::Status PreParseQueryString(query::VectorSearchParameters &parameters) {
+absl::Status ParseQueryString(query::VectorSearchParameters &parameters) {
   auto filter_expression =
       absl::string_view(parameters.parse_vars.query_string);
   auto pos = filter_expression.find(kVectorFilterDelimiter);
@@ -405,35 +405,6 @@ absl::Status PreParseQueryString(query::VectorSearchParameters &parameters) {
   return absl::OkStatus();
 }
 
-//
-// Perform parameter substitution and parse K and the Blob, which were deferred
-//
-absl::Status PostParseQueryString(query::VectorSearchParameters &parameters) {
-  auto parse = [&] {
-    VMSDK_ASSIGN_OR_RETURN(
-        auto k_string,
-        SubstituteParam(parameters, parameters.parse_vars.k_string));
-    VMSDK_ASSIGN_OR_RETURN(parameters.k, vmsdk::To<unsigned>(k_string));
-    VMSDK_ASSIGN_OR_RETURN(
-        parameters.query,
-        SubstituteParam(parameters, parameters.parse_vars.blob_string));
-    // Validate all parameters used, nuke the map to avoid dangling pointers
-    while (!parameters.parse_vars.params.empty()) {
-      auto begin = parameters.parse_vars.params.begin();
-      if (begin->second.first == 0) {
-        return absl::NotFoundError(
-            absl::StrCat("Parameter `", begin->first, "` not used."));
-      }
-      parameters.parse_vars.params.erase(begin);
-    }
-
-    return absl::OkStatus();
-  };
-  VMSDK_RETURN_IF_ERROR(parse()).SetPrepend()
-      << "Error parsing vector similarity parameters. ";
-  return absl::OkStatus();
-}
-
 absl::StatusOr<std::unique_ptr<query::VectorSearchParameters>>
 ParseVectorSearchParameters(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                             int argc, const SchemaManager &schema_manager) {
@@ -461,8 +432,7 @@ ParseVectorSearchParameters(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
         absl::StrCat("Unexpected parameter at position ", (itr.Position() + 1),
                      ":", vmsdk::ToStringView(itr.Get().value())));
   }
-  VMSDK_RETURN_IF_ERROR(PreParseQueryString(*parameters));
-  VMSDK_RETURN_IF_ERROR(PostParseQueryString(*parameters));
+  VMSDK_RETURN_IF_ERROR(ParseQueryString(*parameters));
   VMSDK_RETURN_IF_ERROR(Verify(*parameters));
   parameters->parse_vars.ClearAtEndOfParse();
   return parameters;

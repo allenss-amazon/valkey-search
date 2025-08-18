@@ -82,7 +82,6 @@ struct VectorSearchParameters {
     // at the end of the parse to ensure no dangling pointers.
     absl::string_view query_string;
     absl::string_view score_as_string;
-    absl::string_view k_string;
     absl::string_view blob_string;
     //
     // A Map of param names to values. The target of the map is a pair
@@ -95,7 +94,6 @@ struct VectorSearchParameters {
     void ClearAtEndOfParse() {
       query_string = absl::string_view();
       score_as_string = absl::string_view();
-      k_string = absl::string_view();
       blob_string = absl::string_view();
       CHECK(params.empty());
     }

@@ -11,9 +11,10 @@
 
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "ft_search_parser.h"
 #include "src/commands/ft_aggregate_exec.h"
+#include "src/commands/ft_create_parser.h"
 #include "src/commands/ft_search.h"
-#include "src/commands/ft_search_parser.h"
 #include "src/index_schema.h"
 #include "src/indexes/index_base.h"
 #include "src/metrics.h"
@@ -88,7 +89,7 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
         DBG << " " << load;
         params.return_attributes.emplace_back(query::ReturnAttribute{
             .identifier = vmsdk::MakeUniqueValkeyString(load),
-            .attribute_alias = vmsdk::UniqueRedisString(),
+            .attribute_alias = vmsdk::UniqueValkeyString(),
             .alias = vmsdk::MakeUniqueValkeyString(load)});
         params.AddRecordAttribute(load, load, indexes::IndexerType::kNone);
       }
@@ -111,15 +112,15 @@ absl::StatusOr<std::unique_ptr<AggregateParameters>> ParseCommand(
       SchemaManager::Instance().GetIndexSchema(ValkeyModule_GetSelectedDb(ctx),
                                                index_schema_name));
   RealIndexInterface index_interface(index_schema);
-  auto params = std::make_unique<AggregateParameters>(&index_interface);
+  auto params = std::make_unique<AggregateParameters>(
+      options::GetDefaultTimeoutMs().GetValue(), &index_interface);
   DBG << "AggregateParameters created for index: " << index_schema_name << " @"
       << (void *)params.get() << "\n";
   params->index_schema_name = std::move(index_schema_name);
   params->index_schema = std::move(index_schema);
 
-  VMSDK_RETURN_IF_ERROR(
-      vmsdk::ParseParamValue(itr, params->parse_vars.query_string));
-  VMSDK_RETURN_IF_ERROR(PreParseQueryString(*params));
+  VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, params->query));
+  VMSDK_RETURN_IF_ERROR(ParseQueryString(*params));
 
   // Ensure that key is first value if it gets included...
   CHECK(params->AddRecordAttribute("__key", "__key",
@@ -143,7 +144,6 @@ absl::StatusOr<std::unique_ptr<AggregateParameters>> ParseCommand(
       std::numeric_limits<uint64_t>::max();  // Override default of 10 from
                                              // search
 
-  VMSDK_RETURN_IF_ERROR(PostParseQueryString(*params));
   VMSDK_RETURN_IF_ERROR(ManipulateReturnsClause(*params));
 
   DBG << "At end of parse: " << *params << "\n";
@@ -348,7 +348,7 @@ absl::Status SendReplyInner(ValkeyModuleCtx *ctx,
   ValkeyModule_ReplyWithLongLong(ctx, static_cast<long long>(records.size()));
   while (!records.empty()) {
     auto rec = records.pop_front();
-    ValkeyModule_ReplyWithArray(ctx, REDISMODULE_POSTPONED_ARRAY_LEN);
+    ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_ARRAY_LEN);
     //
     // First the referenced fields
     //
@@ -401,7 +401,7 @@ absl::Status FTAggregateCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
         aggregate::ParseCommand(ctx, argv + 1, argc - 1, schema_manager));
     parameters->index_schema->ProcessMultiQueue();
     bool inside_multi =
-        (ValkeyModule_GetContextFlags(ctx) & REDISMODULE_CTX_FLAGS_MULTI) != 0;
+        (ValkeyModule_GetContextFlags(ctx) & VALKEYMODULE_CTX_FLAGS_MULTI) != 0;
     if (ABSL_PREDICT_FALSE(!ValkeySearch::Instance().SupportParallelQueries() ||
                            inside_multi)) {
       VMSDK_ASSIGN_OR_RETURN(auto neighbors, query::Search(*parameters, true));

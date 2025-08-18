@@ -117,7 +117,8 @@ struct AggregateParameters : public expr::Expression::CompileContext,
     parse_vars.ClearAtEndOfParse();
   }
 
-  AggregateParameters(IndexInterface* index_interface) {
+  AggregateParameters(uint64_t timeout, IndexInterface* index_interface)
+      : query::VectorSearchParameters(timeout, nullptr) {
     parse_vars_.index_interface_ = index_interface;
   }
 
