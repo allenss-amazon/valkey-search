@@ -23,8 +23,8 @@
 #include "src/schema_manager.h"
 #include "src/valkey_search.h"
 
-// #define DBG std::cerr
-#define DBG 0 && std::cerr
+#define DBG std::cerr
+// #define DBG 0 && std::cerr
 
 namespace valkey_search {
 namespace aggregate {
@@ -119,8 +119,8 @@ absl::StatusOr<std::unique_ptr<AggregateParameters>> ParseCommand(
   params->index_schema_name = std::move(index_schema_name);
   params->index_schema = std::move(index_schema);
 
-  VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, params->query));
-  VMSDK_RETURN_IF_ERROR(ParseQueryString(*params));
+  VMSDK_RETURN_IF_ERROR(
+      vmsdk::ParseParamValue(itr, params->parse_vars.query_string));
 
   // Ensure that key is first value if it gets included...
   CHECK(params->AddRecordAttribute("__key", "__key",
@@ -144,6 +144,7 @@ absl::StatusOr<std::unique_ptr<AggregateParameters>> ParseCommand(
       std::numeric_limits<uint64_t>::max();  // Override default of 10 from
                                              // search
 
+  VMSDK_RETURN_IF_ERROR(ParseQueryString(*params));
   VMSDK_RETURN_IF_ERROR(ManipulateReturnsClause(*params));
 
   DBG << "At end of parse: " << *params << "\n";
@@ -379,8 +380,9 @@ absl::Status SendReplyInner(ValkeyModuleCtx *ctx,
   return absl::OkStatus();
 }
 
-void SendReply(ValkeyModuleCtx *ctx, std::deque<indexes::Neighbor> &neighbors,
-               AggregateParameters &parameters) {
+void SendAggReply(ValkeyModuleCtx *ctx,
+                  std::deque<indexes::Neighbor> &neighbors,
+                  AggregateParameters &parameters) {
   auto identifier =
       parameters.index_schema->GetIdentifier(parameters.attribute_alias);
   auto result = SendReplyInner(ctx, neighbors, parameters);
@@ -405,7 +407,7 @@ absl::Status FTAggregateCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
     if (ABSL_PREDICT_FALSE(!ValkeySearch::Instance().SupportParallelQueries() ||
                            inside_multi)) {
       VMSDK_ASSIGN_OR_RETURN(auto neighbors, query::Search(*parameters, true));
-      SendReply(ctx, neighbors, *parameters);
+      SendAggReply(ctx, neighbors, *parameters);
       return absl::OkStatus();
     }
     vmsdk::BlockedClient blocked_client(ctx, async::Reply, async::Timeout,

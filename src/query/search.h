@@ -95,7 +95,7 @@ struct VectorSearchParameters {
       query_string = absl::string_view();
       score_as_string = absl::string_view();
       blob_string = absl::string_view();
-      CHECK(params.empty());
+      params.clear();
     }
   } parse_vars;
   bool IsNonVectorQuery() const { return attribute_alias.empty(); }

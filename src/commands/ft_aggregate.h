@@ -17,8 +17,9 @@ absl::Status FTAggregateCmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                             int argc);
 
 struct AggregateParameters;
-void SendReply(ValkeyModuleCtx *ctx, std::deque<indexes::Neighbor> &neighbors,
-               AggregateParameters &parameters);
+void SendAggReply(ValkeyModuleCtx *ctx,
+                  std::deque<indexes::Neighbor> &neighbors,
+                  AggregateParameters &parameters);
 
 }  // namespace aggregate
 };  // namespace valkey_search
