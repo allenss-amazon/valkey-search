@@ -23,6 +23,7 @@
         "hnsw",
         "hnswlib",
         "Inorder",
+        "kastore",
         "MRMW",
         "mstime",
         "nghi",
