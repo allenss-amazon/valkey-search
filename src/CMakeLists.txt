@@ -104,6 +104,16 @@ add_library(metrics INTERFACE ${SRCS_METRICS})
 target_include_directories(metrics INTERFACE ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(metrics INTERFACE vmsdklib)
 
+set(SRCS_SCHEMA_ATTRIBUTE_STORAGE
+    ${CMAKE_CURRENT_LIST_DIR}/schema_attribute_storage.cc
+    ${CMAKE_CURRENT_LIST_DIR}/schema_attribute_storage.h)
+
+valkey_search_add_static_library(schema_attribute_storage
+                                 "${SRCS_SCHEMA_ATTRIBUTE_STORAGE}")
+target_include_directories(schema_attribute_storage
+                           PUBLIC ${CMAKE_CURRENT_LIST_DIR})
+target_link_libraries(schema_attribute_storage PUBLIC vmsdklib)
+
 set(SRCS_INDEX_SCHEMA ${CMAKE_CURRENT_LIST_DIR}/index_schema.cc
                       ${CMAKE_CURRENT_LIST_DIR}/index_schema.h)
 
@@ -116,6 +126,7 @@ target_link_libraries(index_schema PUBLIC index_schema_cc_proto)
 target_link_libraries(index_schema PUBLIC keyspace_event_manager)
 target_link_libraries(index_schema PUBLIC metrics)
 target_link_libraries(index_schema PUBLIC rdb_serialization)
+target_link_libraries(index_schema PUBLIC schema_attribute_storage)
 target_link_libraries(index_schema PUBLIC vector_externalizer)
 target_link_libraries(index_schema PUBLIC index_base)
 target_link_libraries(index_schema PUBLIC numeric)

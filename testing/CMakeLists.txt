@@ -90,6 +90,7 @@ finalize_test_flags(indexes_test)
 # 1. Core Test Suite - consolidates core functionality tests
 set(CORE_TEST_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/valkey_search_test.cc
+    ${CMAKE_CURRENT_LIST_DIR}/schema_attribute_storage_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/schema_manager_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/keyspace_event_manager_test.cc
     ${CMAKE_CURRENT_LIST_DIR}/server_events_test.cc
@@ -106,6 +107,7 @@ target_link_libraries(core_test PRIVATE testing_common_coordinator)
 target_link_libraries(core_test PRIVATE metrics)
 target_link_libraries(core_test PRIVATE commands)
 target_link_libraries(core_test PRIVATE acl)
+target_link_libraries(core_test PRIVATE schema_attribute_storage)
 target_link_libraries(core_test PRIVATE vmsdklib)
 finalize_test_flags(core_test)
 

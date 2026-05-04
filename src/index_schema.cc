@@ -258,6 +258,10 @@ absl::StatusOr<std::shared_ptr<IndexSchema>> IndexSchema::Create(
           res->AddIndex(attribute.alias(), attribute.identifier(), index));
     }
   }
+  // Close the per-attribute slot registry. After this point, no further slots
+  // may be registered. Per-key storage chunks are sized against the final
+  // SlotCount() value.
+  res->attribute_registry_.Finalize();
   if (!reload && index_schema_proto.skip_initial_scan()) {
     // Creating a new Index with SkipInitialScan. Mark the backfill as done
     // since we are skipping it.
@@ -340,6 +344,13 @@ IndexSchema::~IndexSchema() {
   // as destructing by the main thread.
   if (!is_destructing_) {
     MarkAsDestructing();
+  }
+
+  // KeyAttributeData has an assert-only destructor; it does not free its chunk.
+  // Walk every remaining entry and explicitly tear down per-attribute payloads
+  // before the map itself is destroyed.
+  for (auto &entry : index_key_info_) {
+    attribute_registry_.DestroyContents(entry.second.key_attribute_data_);
   }
 }
 
@@ -636,7 +647,13 @@ void IndexSchema::SyncProcessMutation(ValkeyModuleCtx *ctx,
     // If all attributes are deletes, we can remove the key from the tracked
     // mutation records.
     absl::MutexLock lock(&mutated_records_mutex_);
-    index_key_info_.erase(key);
+    auto itr = index_key_info_.find(key);
+    if (itr != index_key_info_.end()) {
+      // KeyAttributeData has no self-freeing destructor: explicitly tear down
+      // any present per-attribute payloads before dropping the entry.
+      attribute_registry_.DestroyContents(itr->second.key_attribute_data_);
+      index_key_info_.erase(itr);
+    }
   }
   if (text_index_schema_) {
     // Text index structures operate at the schema-level so we commit the

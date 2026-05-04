@@ -34,6 +34,7 @@
 #include "src/indexes/vector_base.h"
 #include "src/keyspace_event_manager.h"
 #include "src/rdb_serialization.h"
+#include "src/schema_attribute_storage.h"
 #include "src/utils/string_interning.h"
 #include "vmsdk/src/blocked_client.h"
 #include "vmsdk/src/command_parser.h"
@@ -87,6 +88,7 @@ class IndexSchema : public KeyspaceEventSubscription,
  public:
   struct IndexKeyInfo {
     MutationSequenceNumber mutation_sequence_number_{0};
+    KeyAttributeData key_attribute_data_;
   };
 
   using IndexKeyInfoMap = absl::flat_hash_map<Key, IndexKeyInfo>;
@@ -374,6 +376,16 @@ class IndexSchema : public KeyspaceEventSubscription,
     return attributes_;
   }
 
+  // Per-schema registry of per-attribute storage slots. Indexes register their
+  // payload type via GetAttributeRegistry().Register<T>() during construction.
+  // Registration is closed at the end of IndexSchema::Create().
+  SchemaAttributeRegistry &GetAttributeRegistry() {
+    return attribute_registry_;
+  }
+  const SchemaAttributeRegistry &GetAttributeRegistry() const {
+    return attribute_registry_;
+  }
+
  protected:
   IndexSchema(ValkeyModuleCtx *ctx,
               const data_model::IndexSchema &index_schema_proto,
@@ -423,6 +435,11 @@ class IndexSchema : public KeyspaceEventSubscription,
   // the corresponding time slice mutex phases. Within the write phase,
   // exclusion is provided by mutated_records_mutex_.
   IndexKeyInfoMap index_key_info_ ABSL_GUARDED_BY(time_sliced_mutex_);
+
+  // Per-IndexSchema registry of attribute storage slots. Populated by
+  // Index instances during IndexSchema::Create() and frozen via Finalize()
+  // before any key is ingested.
+  SchemaAttributeRegistry attribute_registry_;
 
   struct BackfillJob {
     BackfillJob() = delete;
