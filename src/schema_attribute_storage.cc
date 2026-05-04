@@ -8,8 +8,10 @@
 #include "src/schema_attribute_storage.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <cstring>
+#include <memory>
 #include <new>
 #include <vector>
 
@@ -25,6 +27,14 @@ inline size_t AlignUp(size_t offset, size_t align) {
 }
 
 }  // namespace
+
+void SchemaAttributeRegistry::Finalize() {
+  CHECK(!finalized_) << "SchemaAttributeRegistry::Finalize called twice";
+  // make_unique<T[]> value-initializes; std::atomic<size_t> value-initialized
+  // is zero-initialized.
+  populated_counts_ = std::make_unique<std::atomic<size_t>[]>(entries_.size());
+  finalized_ = true;
+}
 
 std::optional<size_t> SchemaAttributeRegistry::SlotOffset(const void* chunk,
                                                           uint32_t slot) const {
@@ -89,6 +99,7 @@ void SchemaAttributeRegistry::DestroyContents(KeyAttributeData& data) const {
       offset = AlignUp(offset, e.align);
       e.destroy(static_cast<char*>(data.chunk_) + offset);
       offset += e.size;
+      populated_counts_[k].fetch_sub(1, std::memory_order_relaxed);
       byte &= static_cast<uint8_t>(byte - 1);
     }
   }
@@ -144,7 +155,8 @@ void KeyAttributeDataBuilder::MaterializeInto(KeyAttributeData& out) && {
   }
 
   // Move-construct each staged payload into its final position, then destroy
-  // and free the staging buffer.
+  // and free the staging buffer. Bump the populated-key counter for each slot
+  // we just placed in the chunk.
   size_t offset = bitmap_bytes;
   for (uint32_t slot : slots) {
     const auto& e = registry_->Get(slot);
@@ -155,6 +167,8 @@ void KeyAttributeDataBuilder::MaterializeInto(KeyAttributeData& out) && {
     e.destroy(src);
     ::operator delete(src, std::align_val_t{e.align});
     offset += e.size;
+    registry_->populated_counts_[slot].fetch_add(1,
+                                                 std::memory_order_relaxed);
   }
   staged_.clear();
   out.chunk_ = chunk;

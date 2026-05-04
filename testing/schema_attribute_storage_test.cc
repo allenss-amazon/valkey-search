@@ -290,6 +290,90 @@ TEST_F(SchemaAttributeStorageTest, MixedAlignmentPayloadsRoundTrip) {
   reg.DestroyContents(data);
 }
 
+TEST_F(SchemaAttributeStorageTest, GetKeyCountStartsAtZero) {
+  SchemaAttributeRegistry reg;
+  auto a = reg.Register<int>();
+  auto b = reg.Register<int>();
+  reg.Finalize();
+  EXPECT_EQ(a.GetKeyCount(), 0u);
+  EXPECT_EQ(b.GetKeyCount(), 0u);
+}
+
+TEST_F(SchemaAttributeStorageTest, GetKeyCountTracksMaterializeAndDestroy) {
+  SchemaAttributeRegistry reg;
+  auto a = reg.Register<int>();
+  auto b = reg.Register<int>();
+  auto c = reg.Register<int>();
+  reg.Finalize();
+
+  // Materialize three keys with various subsets of slots populated.
+  KeyAttributeData k1, k2, k3;
+  {
+    KeyAttributeDataBuilder builder(reg);
+    a.EmplaceInBuilder(builder, 1);
+    b.EmplaceInBuilder(builder, 2);
+    std::move(builder).MaterializeInto(k1);  // a, b
+  }
+  {
+    KeyAttributeDataBuilder builder(reg);
+    b.EmplaceInBuilder(builder, 20);
+    c.EmplaceInBuilder(builder, 30);
+    std::move(builder).MaterializeInto(k2);  // b, c
+  }
+  {
+    KeyAttributeDataBuilder builder(reg);
+    a.EmplaceInBuilder(builder, 100);
+    std::move(builder).MaterializeInto(k3);  // a
+  }
+
+  EXPECT_EQ(a.GetKeyCount(), 2u);  // k1, k3
+  EXPECT_EQ(b.GetKeyCount(), 2u);  // k1, k2
+  EXPECT_EQ(c.GetKeyCount(), 1u);  // k2
+
+  reg.DestroyContents(k1);
+  EXPECT_EQ(a.GetKeyCount(), 1u);
+  EXPECT_EQ(b.GetKeyCount(), 1u);
+  EXPECT_EQ(c.GetKeyCount(), 1u);
+
+  reg.DestroyContents(k2);
+  EXPECT_EQ(a.GetKeyCount(), 1u);
+  EXPECT_EQ(b.GetKeyCount(), 0u);
+  EXPECT_EQ(c.GetKeyCount(), 0u);
+
+  reg.DestroyContents(k3);
+  EXPECT_EQ(a.GetKeyCount(), 0u);
+  EXPECT_EQ(b.GetKeyCount(), 0u);
+  EXPECT_EQ(c.GetKeyCount(), 0u);
+}
+
+TEST_F(SchemaAttributeStorageTest, GetKeyCountUnchangedByEmptyBuilder) {
+  SchemaAttributeRegistry reg;
+  auto a = reg.Register<int>();
+  reg.Finalize();
+  KeyAttributeData data;
+  KeyAttributeDataBuilder builder(reg);
+  std::move(builder).MaterializeInto(data);
+  EXPECT_TRUE(data.IsEmpty());
+  EXPECT_EQ(a.GetKeyCount(), 0u);
+}
+
+TEST_F(SchemaAttributeStorageTest, GetKeyCountUnchangedByMovingHolder) {
+  SchemaAttributeRegistry reg;
+  auto a = reg.Register<int>();
+  reg.Finalize();
+  KeyAttributeData src;
+  KeyAttributeDataBuilder builder(reg);
+  a.EmplaceInBuilder(builder, 7);
+  std::move(builder).MaterializeInto(src);
+  EXPECT_EQ(a.GetKeyCount(), 1u);
+  KeyAttributeData dst(std::move(src));
+  // Moving the holder does not allocate or release a chunk; the counter is
+  // unchanged.
+  EXPECT_EQ(a.GetKeyCount(), 1u);
+  reg.DestroyContents(dst);
+  EXPECT_EQ(a.GetKeyCount(), 0u);
+}
+
 #ifndef NDEBUG
 TEST_F(SchemaAttributeStorageTest, RegisterAfterFinalizeFatal) {
   SchemaAttributeRegistry reg;

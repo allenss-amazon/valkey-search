@@ -8,9 +8,11 @@
 #ifndef VALKEYSEARCH_SRC_SCHEMA_ATTRIBUTE_STORAGE_H_
 #define VALKEYSEARCH_SRC_SCHEMA_ATTRIBUTE_STORAGE_H_
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <new>
 #include <optional>
 #include <utility>
@@ -86,16 +88,15 @@ class SchemaAttributeRegistry {
   template <typename T>
   AttributeSlot<T> Register();
 
-  // Closes the registry. After this call no new slots may be registered.
-  void Finalize() {
-    CHECK(!finalized_) << "SchemaAttributeRegistry::Finalize called twice";
-    finalized_ = true;
-  }
+  // Closes the registry. After this call no new slots may be registered. The
+  // per-slot populated-key counters are allocated here.
+  void Finalize();
   bool IsFinalized() const noexcept { return finalized_; }
 
-  // Selectively destruct the present payloads of `data` and free its chunk.
-  // After this call data.empty() == true. Safe to call on an already-empty
-  // KeyAttributeData (no-op).
+  // Selectively destruct the present payloads of `data` and free its chunk,
+  // decrementing the populated-key counter of every slot that was set in the
+  // bitmap. After this call data.IsEmpty() == true. Safe to call on an
+  // already-empty KeyAttributeData (no-op).
   void DestroyContents(KeyAttributeData& data) const;
 
  private:
@@ -121,7 +122,14 @@ class SchemaAttributeRegistry {
   // std::nullopt if the slot is not present. `chunk` must be non-null.
   std::optional<size_t> SlotOffset(const void* chunk, uint32_t slot) const;
 
+  // Atomic per-slot populated-key count. Available after Finalize().
+  size_t GetKeyCount(uint32_t slot) const noexcept {
+    return populated_counts_[slot].load(std::memory_order_relaxed);
+  }
+
   std::vector<SlotEntry> entries_;
+  // One counter per slot; allocated at Finalize(). Pointer-stable thereafter.
+  std::unique_ptr<std::atomic<size_t>[]> populated_counts_;
   size_t max_align_ = 1;
   bool finalized_ = false;
 };
@@ -207,6 +215,12 @@ class AttributeSlot {
   std::optional<std::reference_wrapper<T>> AccessInBuilder(
       KeyAttributeDataBuilder& b) const {
     return b.template AccessSlot<T>(slot_);
+  }
+
+  // Number of keys whose KeyAttributeData currently has this slot populated.
+  // Updated atomically by MaterializeInto (++) and DestroyContents (--).
+  size_t GetKeyCount() const noexcept {
+    return registry_->GetKeyCount(slot_);
   }
 
  private:
