@@ -486,7 +486,9 @@ elif [ ! -z "${RUN_TEST}" ]; then
     ("${TESTS_DIR}/${RUN_TEST}" --gtest_brief=1 > "${CURRENT_TEST_OUTPUT_FILE}" 2>&1 && cat "${CURRENT_TEST_OUTPUT_FILE}" >> "${TEST_OUTPUT_FILE}" && print_test_ok) || { cat "${CURRENT_TEST_OUTPUT_FILE}" >> "${TEST_OUTPUT_FILE}"; print_test_error_and_exit; }
     rm -f "${CURRENT_TEST_OUTPUT_FILE}"
     print_test_summary
-elif [[ "${INTEGRATION_TEST}" == "yes" ]]; then
+fi
+
+if [[ "${INTEGRATION_TEST}" == "yes" ]]; then
     if [ ! -z "${TEST_PATTERN}" ]; then
         echo ""
         LOG_WARNING " ** TEST_PATTERN is found, skipping Abseil based integration tests **"
