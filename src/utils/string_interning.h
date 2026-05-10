@@ -10,6 +10,7 @@
 
 #include <absl/container/btree_map.h>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <iterator>
@@ -197,36 +198,58 @@ using InternedStringNodeHashMap = absl::node_hash_map<InternedStringPtr, T>;
 
 //
 // BagOfInternedStringPtrs is a space-optimized drop-in replacement for
-// InternedStringSet (i.e. absl::flat_hash_set<InternedStringPtr>) tuned for the
-// extremely common case of zero or one elements. The whole object is exactly
-// 8 bytes:
+// InternedStringSet (i.e. absl::flat_hash_set<InternedStringPtr>) tuned for
+// small sets. The whole object is exactly 8 bytes; it picks one of four
+// representations based on the bottom two bits of storage_:
 //
-//   storage_ == 0                   -> empty
-//   storage_ != 0, bit 0 clear      -> single-element mode; the slot IS a
-//                                      clean InternedStringPtr (no tag bits
-//                                      anywhere -- usable in place via
-//                                      reinterpret_cast)
-//   storage_ has bit 0 set          -> multi-element mode; (storage_ & ~1)
-//                                      is the InternedStringSet*
+//   storage_ == 0                            -> empty
+//   storage_ != 0, low 2 bits == 00          -> Single: the slot IS a clean
+//                                               InternedStringPtr (8 bytes)
+//   storage_ low 2 bits == 01                -> Array4: (storage_ & ~0x3) is
+//                                               a heap std::array<Ptr, 4>;
+//                                               holds 2-4 elements packed at
+//                                               the front, nulls at the tail
+//   storage_ low 2 bits == 10                -> Array8: (storage_ & ~0x3) is
+//                                               a heap std::array<Ptr, 8>;
+//                                               holds 5-8 elements packed at
+//                                               the front, nulls at the tail
+//   storage_ low 2 bits == 11                -> Set: (storage_ & ~0x3) is an
+//                                               InternedStringSet*; holds 9+
+//                                               elements
 //
-// Tag location: bit 0 is free because absl::flat_hash_set allocated via `new`
-// has alignment 8. The tag must be stripped before dereferencing the multi
-// pointer (a tagged value is misaligned and points one byte past the real
-// allocation). Single mode, by contrast, stores a clean InternedStringPtr
-// directly, so the bag can hand out a stable reference to it without any
-// masking or copying.
+// Tag location: bits 0-1 are free because (a) InternedStringPtr wraps a
+// pointer to InternedString whose first member is std::atomic<uint32_t>
+// (alignment 4 → low 2 bits 0), and (b) std::array of InternedStringPtr and
+// absl::flat_hash_set allocated via `new` have alignment 8 → low 3 bits 0.
+// The tag must be stripped before dereferencing any heap-pointer mode (a
+// tagged value is misaligned and would not point at the real object). Single
+// mode stores a clean InternedStringPtr directly, so the bag hands out a
+// stable reference to it without masking.
 //
-// AddressSanitizer note: the tagged value (multi mode) sets only the low bit,
-// so it still points one byte INTO the heap allocation it represents. ASAN's
-// leak scanner uses interior-pointer detection and recognizes such pointers
-// as references to the surrounding allocation, so the owning pointer is not
-// hidden from the leak checker.
+// AddressSanitizer note: the tagged values point at most three bytes into the
+// heap allocation they represent. ASAN's leak scanner uses interior-pointer
+// detection and recognizes such pointers as references to the surrounding
+// allocation, so the owning pointer is not hidden from the leak checker.
+//
+// Mode invariants in steady state:
+//   Single -> 1 element
+//   Array4 -> 2..4 elements
+//   Array8 -> 5..8 elements
+//   Set    -> 9+ elements
+// Insert promotes one mode up when capacity is exceeded; erase demotes one
+// mode down when count drops below the lower bound (single demotion step per
+// erase, never cascades because erase removes only one element).
+//
+// In any array mode, elements occupy contiguous slots [0, count) with nulls
+// in [count, capacity). size() and find() linear-scan the array. The user
+// pays O(N) for N elements in the array, which is fine because N <= 8.
 //
 // This class works exclusively through the public InternedStringPtr API. It
 // is not a friend of InternedStringPtr or its underlying string type. All
 // ref-count traffic flows through InternedStringPtr's public copy/move
 // constructors and destructor, invoked via placement new and explicit
-// destruction on the storage slot.
+// destruction on the storage slot (or, for the array/set modes, normal
+// member-by-member construction/destruction inside the heap object).
 //
 // The bag is intentionally non-copyable and non-equality-comparable; only
 // move construction and move assignment are provided.
@@ -250,23 +273,32 @@ class BagOfInternedStringPtrs {
 
     reference operator*() const {
       if (tag_ == Tag::kSingle) {
-        // bag_->storage_ in single mode IS a clean InternedStringPtr;
-        // SingleRef() exposes it as a stable reference into the bag's slot.
         return bag_->SingleRef();
       }
-      return *multi_;
+      if (tag_ == Tag::kArray) {
+        return array_data_[array_idx_];
+      }
+      return *set_iter_;
     }
     pointer operator->() const {
       if (tag_ == Tag::kSingle) {
         return &bag_->SingleRef();
       }
-      return multi_.operator->();
+      if (tag_ == Tag::kArray) {
+        return &array_data_[array_idx_];
+      }
+      return set_iter_.operator->();
     }
     const_iterator &operator++() {
       if (tag_ == Tag::kSingle) {
         tag_ = Tag::kEnd;
-      } else if (tag_ == Tag::kMulti) {
-        ++multi_;
+      } else if (tag_ == Tag::kArray) {
+        ++array_idx_;
+        if (array_idx_ >= array_count_) {
+          tag_ = Tag::kEnd;
+        }
+      } else if (tag_ == Tag::kSet) {
+        ++set_iter_;
       }
       return *this;
     }
@@ -284,8 +316,10 @@ class BagOfInternedStringPtrs {
           return true;
         case Tag::kSingle:
           return bag_ == other.bag_;
-        case Tag::kMulti:
-          return multi_ == other.multi_;
+        case Tag::kArray:
+          return bag_ == other.bag_ && array_idx_ == other.array_idx_;
+        case Tag::kSet:
+          return set_iter_ == other.set_iter_;
       }
       return false;
     }
@@ -295,15 +329,31 @@ class BagOfInternedStringPtrs {
 
    private:
     friend class BagOfInternedStringPtrs;
-    enum class Tag { kEnd, kSingle, kMulti };
+    enum class Tag { kEnd, kSingle, kArray, kSet };
 
-    const_iterator(Tag tag, const BagOfInternedStringPtrs *bag,
-                   InternedStringSet::const_iterator multi = {})
-        : tag_(tag), bag_(bag), multi_(multi) {}
+    // Single-mode constructor.
+    const_iterator(Tag tag, const BagOfInternedStringPtrs *bag)
+        : tag_(tag), bag_(bag) {}
+    // Array-mode constructor.
+    const_iterator(const BagOfInternedStringPtrs *bag,
+                   const InternedStringPtr *data, std::size_t count,
+                   std::size_t idx)
+        : tag_(Tag::kArray),
+          bag_(bag),
+          array_data_(data),
+          array_count_(count),
+          array_idx_(idx) {}
+    // Set-mode constructor.
+    const_iterator(const BagOfInternedStringPtrs *bag,
+                   InternedStringSet::const_iterator it)
+        : tag_(Tag::kSet), bag_(bag), set_iter_(it) {}
 
     Tag tag_ = Tag::kEnd;
     const BagOfInternedStringPtrs *bag_ = nullptr;
-    InternedStringSet::const_iterator multi_;
+    const InternedStringPtr *array_data_ = nullptr;
+    std::size_t array_count_ = 0;
+    std::size_t array_idx_ = 0;
+    InternedStringSet::const_iterator set_iter_;
   };
   using iterator = const_iterator;
   using pointer = const InternedStringPtr *;
@@ -329,118 +379,120 @@ class BagOfInternedStringPtrs {
   ~BagOfInternedStringPtrs() { clear(); }
 
   size_type size() const {
-    if (IsEmpty()) {
-      return 0;
+    switch (storage_ & kTagMask) {
+      case kSingleTag:
+        return storage_ == 0 ? 0 : 1;
+      case kArray4Tag:
+        return ArrayCount(*GetArray4());
+      case kArray8Tag:
+        return ArrayCount(*GetArray8());
+      case kSetTag:
+        return GetSet()->size();
     }
-    if (IsSingle()) {
-      return 1;
-    }
-    return AsMulti()->size();
+    return 0;
   }
   bool empty() const { return storage_ == 0; }
 
   void clear() {
-    if (IsSingle()) {
-      // storage_ in single mode IS a clean InternedStringPtr; in-place
-      // destruct it to drop the ref count, then zero out the slot.
-      reinterpret_cast<InternedStringPtr *>(&storage_)->~InternedStringPtr();
-    } else if (IsMulti()) {
-      delete AsMulti();
+    switch (storage_ & kTagMask) {
+      case kSingleTag:
+        if (storage_ != 0) {
+          reinterpret_cast<InternedStringPtr *>(&storage_)
+              ->~InternedStringPtr();
+        }
+        break;
+      case kArray4Tag:
+        delete GetArray4();
+        break;
+      case kArray8Tag:
+        delete GetArray8();
+        break;
+      case kSetTag:
+        delete GetSet();
+        break;
     }
     storage_ = 0;
   }
 
   bool contains(const InternedStringPtr &key) const {
-    if (IsEmpty()) {
-      return false;
+    switch (storage_ & kTagMask) {
+      case kSingleTag:
+        return storage_ != 0 && SingleRef() == key;
+      case kArray4Tag:
+        return ArrayFind(*GetArray4(), key) != kArray4Cap;
+      case kArray8Tag:
+        return ArrayFind(*GetArray8(), key) != kArray8Cap;
+      case kSetTag:
+        return GetSet()->contains(key);
     }
-    if (IsSingle()) {
-      // SingleRef() exposes storage_ as an InternedStringPtr; default
-      // operator== is a bit-exact compare of the underlying impl_ values.
-      return SingleRef() == key;
-    }
-    return AsMulti()->contains(key);
+    return false;
   }
 
   const_iterator find(const InternedStringPtr &key) const {
-    if (IsEmpty()) {
-      return end();
-    }
-    if (IsSingle()) {
-      if (SingleRef() == key) {
-        return const_iterator(const_iterator::Tag::kSingle, this);
+    switch (storage_ & kTagMask) {
+      case kSingleTag:
+        if (storage_ != 0 && SingleRef() == key) {
+          return const_iterator(const_iterator::Tag::kSingle, this);
+        }
+        return end();
+      case kArray4Tag: {
+        auto *arr = GetArray4();
+        std::size_t idx = ArrayFind(*arr, key);
+        if (idx == arr->size()) {
+          return end();
+        }
+        return const_iterator(this, arr->data(), ArrayCount(*arr), idx);
       }
-      return end();
+      case kArray8Tag: {
+        auto *arr = GetArray8();
+        std::size_t idx = ArrayFind(*arr, key);
+        if (idx == arr->size()) {
+          return end();
+        }
+        return const_iterator(this, arr->data(), ArrayCount(*arr), idx);
+      }
+      case kSetTag: {
+        auto *set = GetSet();
+        auto it = set->find(key);
+        if (it == set->end()) {
+          return end();
+        }
+        return const_iterator(this, it);
+      }
     }
-    auto it = AsMulti()->find(key);
-    if (it == AsMulti()->end()) {
-      return end();
-    }
-    return const_iterator(const_iterator::Tag::kMulti, this, it);
+    return end();
   }
 
   std::pair<const_iterator, bool> insert(const InternedStringPtr &key) {
-    if (IsEmpty()) {
-      // Public copy ctor bumps the ref count and writes a clean
-      // InternedStringPtr directly into storage_. No tagging needed.
-      new (&storage_) InternedStringPtr(key);
-      return {const_iterator(const_iterator::Tag::kSingle, this), true};
-    }
-    if (IsSingle()) {
-      if (SingleRef() == key) {
-        return {const_iterator(const_iterator::Tag::kSingle, this), false};
-      }
-      // Promote: move the lone clean InternedStringPtr into a new set, then
-      // insert the new key.
-      auto *set = new InternedStringSet();
-      set->insert(
-          std::move(*reinterpret_cast<InternedStringPtr *>(&storage_)));
-      // The move ctor nulled impl_, so storage_ is now 0.
-      auto [it, inserted] = set->insert(key);
-      SetMulti(set);
-      return {const_iterator(const_iterator::Tag::kMulti, this, it), inserted};
-    }
-    auto [it, inserted] = AsMulti()->insert(key);
-    return {const_iterator(const_iterator::Tag::kMulti, this, it), inserted};
+    return InsertImpl(key, /*is_rvalue=*/false);
   }
   std::pair<const_iterator, bool> insert(InternedStringPtr &&key) {
-    if (IsEmpty()) {
-      // Public move ctor adopts the ref count without bump/drop.
-      new (&storage_) InternedStringPtr(std::move(key));
-      return {const_iterator(const_iterator::Tag::kSingle, this), true};
-    }
-    if (IsSingle()) {
-      if (SingleRef() == key) {
-        return {const_iterator(const_iterator::Tag::kSingle, this), false};
-      }
-      auto *set = new InternedStringSet();
-      set->insert(
-          std::move(*reinterpret_cast<InternedStringPtr *>(&storage_)));
-      auto [it, inserted] = set->insert(std::move(key));
-      SetMulti(set);
-      return {const_iterator(const_iterator::Tag::kMulti, this, it), inserted};
-    }
-    auto [it, inserted] = AsMulti()->insert(std::move(key));
-    return {const_iterator(const_iterator::Tag::kMulti, this, it), inserted};
+    return InsertImpl(std::move(key), /*is_rvalue=*/true);
   }
 
   size_type erase(const InternedStringPtr &key) {
-    if (IsEmpty()) {
-      return 0;
-    }
-    if (IsSingle()) {
-      if (SingleRef() == key) {
-        reinterpret_cast<InternedStringPtr *>(&storage_)->~InternedStringPtr();
-        storage_ = 0;
-        return 1;
+    switch (storage_ & kTagMask) {
+      case kSingleTag:
+        if (storage_ != 0 && SingleRef() == key) {
+          reinterpret_cast<InternedStringPtr *>(&storage_)
+              ->~InternedStringPtr();
+          storage_ = 0;
+          return 1;
+        }
+        return 0;
+      case kArray4Tag:
+        return EraseFromArray4(key);
+      case kArray8Tag:
+        return EraseFromArray8(key);
+      case kSetTag: {
+        size_type n = GetSet()->erase(key);
+        if (n > 0) {
+          DemoteSetIfPossible();
+        }
+        return n;
       }
-      return 0;
     }
-    size_type n = AsMulti()->erase(key);
-    if (n > 0) {
-      DemoteIfPossible();
-    }
-    return n;
+    return 0;
   }
 
   // erase(iterator) follows flat_hash_set semantics: any outstanding iterator
@@ -449,30 +501,61 @@ class BagOfInternedStringPtrs {
   // we mirror that here and always return end(). Callers that need to
   // continue iterating after an erase must restart from begin().
   const_iterator erase(const_iterator pos) {
-    if (pos.tag_ == const_iterator::Tag::kSingle) {
-      reinterpret_cast<InternedStringPtr *>(&storage_)->~InternedStringPtr();
-      storage_ = 0;
-      return end();
+    switch (pos.tag_) {
+      case const_iterator::Tag::kSingle:
+        reinterpret_cast<InternedStringPtr *>(&storage_)->~InternedStringPtr();
+        storage_ = 0;
+        return end();
+      case const_iterator::Tag::kArray:
+        if (IsArray4()) {
+          ArrayEraseAt(*GetArray4(), pos.array_idx_);
+          DemoteArray4IfNeeded();
+        } else if (IsArray8()) {
+          ArrayEraseAt(*GetArray8(), pos.array_idx_);
+          DemoteArray8IfNeeded();
+        }
+        return end();
+      case const_iterator::Tag::kSet:
+        GetSet()->erase(pos.set_iter_);
+        DemoteSetIfPossible();
+        return end();
+      case const_iterator::Tag::kEnd:
+        return end();
     }
-    AsMulti()->erase(pos.multi_);
-    DemoteIfPossible();
     return end();
   }
 
   const_iterator begin() const {
-    if (IsEmpty()) {
-      return end();
+    switch (storage_ & kTagMask) {
+      case kSingleTag:
+        if (storage_ == 0) {
+          return end();
+        }
+        return const_iterator(const_iterator::Tag::kSingle, this);
+      case kArray4Tag: {
+        auto *arr = GetArray4();
+        std::size_t cnt = ArrayCount(*arr);
+        if (cnt == 0) {
+          return end();
+        }
+        return const_iterator(this, arr->data(), cnt, 0);
+      }
+      case kArray8Tag: {
+        auto *arr = GetArray8();
+        std::size_t cnt = ArrayCount(*arr);
+        if (cnt == 0) {
+          return end();
+        }
+        return const_iterator(this, arr->data(), cnt, 0);
+      }
+      case kSetTag:
+        return const_iterator(this, GetSet()->begin());
     }
-    if (IsSingle()) {
-      return const_iterator(const_iterator::Tag::kSingle, this);
-    }
-    return const_iterator(const_iterator::Tag::kMulti, this,
-                          AsMulti()->begin());
+    return end();
   }
   const_iterator end() const {
-    if (IsMulti()) {
-      return const_iterator(const_iterator::Tag::kMulti, this,
-                            AsMulti()->end());
+    if (IsSet()) {
+      return const_iterator(this, GetSet()->end());
     }
     return const_iterator();
   }
@@ -484,47 +567,260 @@ class BagOfInternedStringPtrs {
   }
 
  private:
-  // Bit 0 marks the multi-element mode. The single mode stores a clean
-  // InternedStringPtr directly with no tag bits.
-  static constexpr uintptr_t kMultiTag = uintptr_t(1);
+  static constexpr std::size_t kArray4Cap = 4;
+  static constexpr std::size_t kArray8Cap = 8;
+  using Array4 = std::array<InternedStringPtr, kArray4Cap>;
+  using Array8 = std::array<InternedStringPtr, kArray8Cap>;
+
+  static constexpr uintptr_t kTagMask = 0x3;
+  static constexpr uintptr_t kSingleTag = 0;   // also used for empty
+  static constexpr uintptr_t kArray4Tag = 1;
+  static constexpr uintptr_t kArray8Tag = 2;
+  static constexpr uintptr_t kSetTag = 3;
 
   uintptr_t storage_ = 0;
 
   bool IsEmpty() const { return storage_ == 0; }
-  bool IsMulti() const { return (storage_ & kMultiTag) != 0; }
   bool IsSingle() const {
-    return storage_ != 0 && (storage_ & kMultiTag) == 0;
+    return storage_ != 0 && (storage_ & kTagMask) == kSingleTag;
   }
+  bool IsArray4() const { return (storage_ & kTagMask) == kArray4Tag; }
+  bool IsArray8() const { return (storage_ & kTagMask) == kArray8Tag; }
+  bool IsSet() const { return (storage_ & kTagMask) == kSetTag; }
 
   // Stable reference to the bag's single-mode slot, viewed as an
   // InternedStringPtr. Precondition: IsSingle().
   const InternedStringPtr &SingleRef() const {
     return *reinterpret_cast<const InternedStringPtr *>(&storage_);
   }
-  InternedStringSet *AsMulti() const {
-    return reinterpret_cast<InternedStringSet *>(storage_ & ~kMultiTag);
+  InternedStringPtr &SingleRefMut() {
+    return *reinterpret_cast<InternedStringPtr *>(&storage_);
   }
-  void SetMulti(InternedStringSet *p) {
-    storage_ = reinterpret_cast<uintptr_t>(p) | kMultiTag;
+  Array4 *GetArray4() const {
+    return reinterpret_cast<Array4 *>(storage_ & ~kTagMask);
+  }
+  Array8 *GetArray8() const {
+    return reinterpret_cast<Array8 *>(storage_ & ~kTagMask);
+  }
+  InternedStringSet *GetSet() const {
+    return reinterpret_cast<InternedStringSet *>(storage_ & ~kTagMask);
+  }
+  void SetArray4(Array4 *p) {
+    storage_ = reinterpret_cast<uintptr_t>(p) | kArray4Tag;
+  }
+  void SetArray8(Array8 *p) {
+    storage_ = reinterpret_cast<uintptr_t>(p) | kArray8Tag;
+  }
+  void SetSet(InternedStringSet *p) {
+    storage_ = reinterpret_cast<uintptr_t>(p) | kSetTag;
   }
 
-  void DemoteIfPossible() {
-    if (!IsMulti()) {
+  // Count non-null prefix of an array (since elements are collapsed to front).
+  template <std::size_t N>
+  static std::size_t ArrayCount(const std::array<InternedStringPtr, N> &arr) {
+    std::size_t i = 0;
+    while (i < N && arr[i]) {
+      ++i;
+    }
+    return i;
+  }
+  // Linear-search an array for a key; returns N if not found.
+  template <std::size_t N>
+  static std::size_t ArrayFind(const std::array<InternedStringPtr, N> &arr,
+                               const InternedStringPtr &key) {
+    for (std::size_t i = 0; i < N && arr[i]; ++i) {
+      if (arr[i] == key) {
+        return i;
+      }
+    }
+    return N;
+  }
+  // Erase the element at `idx`, shifting subsequent elements left to keep the
+  // packed-from-zero invariant.
+  template <std::size_t N>
+  static void ArrayEraseAt(std::array<InternedStringPtr, N> &arr,
+                           std::size_t idx) {
+    std::size_t i = idx;
+    while (i + 1 < N && arr[i + 1]) {
+      arr[i] = std::move(arr[i + 1]);
+      ++i;
+    }
+    arr[i] = nullptr;
+  }
+
+  template <typename Key>
+  std::pair<const_iterator, bool> InsertImpl(Key &&key, bool is_rvalue) {
+    switch (storage_ & kTagMask) {
+      case kSingleTag:
+        if (storage_ == 0) {
+          if (is_rvalue) {
+            new (&storage_) InternedStringPtr(std::move(key));
+          } else {
+            new (&storage_) InternedStringPtr(key);
+          }
+          return {const_iterator(const_iterator::Tag::kSingle, this), true};
+        }
+        if (SingleRef() == key) {
+          return {const_iterator(const_iterator::Tag::kSingle, this), false};
+        }
+        // Single -> Array4: move the lone element to slot 0, key to slot 1.
+        {
+          auto *arr = new Array4();
+          (*arr)[0] = std::move(SingleRefMut());
+          if (is_rvalue) {
+            (*arr)[1] = std::move(key);
+          } else {
+            (*arr)[1] = key;
+          }
+          SetArray4(arr);
+          return {const_iterator(this, arr->data(), 2, 1), true};
+        }
+      case kArray4Tag:
+        return InsertIntoArray4(std::forward<Key>(key), is_rvalue);
+      case kArray8Tag:
+        return InsertIntoArray8(std::forward<Key>(key), is_rvalue);
+      case kSetTag: {
+        auto *set = GetSet();
+        if (is_rvalue) {
+          auto [it, inserted] = set->insert(std::move(key));
+          return {const_iterator(this, it), inserted};
+        }
+        auto [it, inserted] = set->insert(key);
+        return {const_iterator(this, it), inserted};
+      }
+    }
+    return {end(), false};
+  }
+
+  template <typename Key>
+  std::pair<const_iterator, bool> InsertIntoArray4(Key &&key, bool is_rvalue) {
+    auto *arr = GetArray4();
+    for (std::size_t i = 0; i < kArray4Cap; ++i) {
+      if (!(*arr)[i]) {
+        if (is_rvalue) {
+          (*arr)[i] = std::move(key);
+        } else {
+          (*arr)[i] = key;
+        }
+        return {const_iterator(this, arr->data(), i + 1, i), true};
+      }
+      if ((*arr)[i] == key) {
+        return {const_iterator(this, arr->data(), ArrayCount(*arr), i), false};
+      }
+    }
+    // Full and key not present: promote to Array8.
+    auto *arr8 = new Array8();
+    for (std::size_t i = 0; i < kArray4Cap; ++i) {
+      (*arr8)[i] = std::move((*arr)[i]);
+    }
+    delete arr;
+    if (is_rvalue) {
+      (*arr8)[4] = std::move(key);
+    } else {
+      (*arr8)[4] = key;
+    }
+    SetArray8(arr8);
+    return {const_iterator(this, arr8->data(), 5, 4), true};
+  }
+
+  template <typename Key>
+  std::pair<const_iterator, bool> InsertIntoArray8(Key &&key, bool is_rvalue) {
+    auto *arr = GetArray8();
+    for (std::size_t i = 0; i < kArray8Cap; ++i) {
+      if (!(*arr)[i]) {
+        if (is_rvalue) {
+          (*arr)[i] = std::move(key);
+        } else {
+          (*arr)[i] = key;
+        }
+        return {const_iterator(this, arr->data(), i + 1, i), true};
+      }
+      if ((*arr)[i] == key) {
+        return {const_iterator(this, arr->data(), ArrayCount(*arr), i), false};
+      }
+    }
+    // Full and key not present: promote to Set.
+    auto *set = new InternedStringSet();
+    for (std::size_t i = 0; i < kArray8Cap; ++i) {
+      set->insert(std::move((*arr)[i]));
+    }
+    delete arr;
+    InternedStringSet::const_iterator it;
+    bool inserted;
+    if (is_rvalue) {
+      auto pr = set->insert(std::move(key));
+      it = pr.first;
+      inserted = pr.second;
+    } else {
+      auto pr = set->insert(key);
+      it = pr.first;
+      inserted = pr.second;
+    }
+    SetSet(set);
+    return {const_iterator(this, it), inserted};
+  }
+
+  size_type EraseFromArray4(const InternedStringPtr &key) {
+    auto *arr = GetArray4();
+    std::size_t idx = ArrayFind(*arr, key);
+    if (idx == kArray4Cap) {
+      return 0;
+    }
+    ArrayEraseAt(*arr, idx);
+    DemoteArray4IfNeeded();
+    return 1;
+  }
+  size_type EraseFromArray8(const InternedStringPtr &key) {
+    auto *arr = GetArray8();
+    std::size_t idx = ArrayFind(*arr, key);
+    if (idx == kArray8Cap) {
+      return 0;
+    }
+    ArrayEraseAt(*arr, idx);
+    DemoteArray8IfNeeded();
+    return 1;
+  }
+
+  // Demote Array4 -> Single when count drops to 1, or -> Empty when 0.
+  void DemoteArray4IfNeeded() {
+    auto *arr = GetArray4();
+    if (!(*arr)[0]) {
+      delete arr;
+      storage_ = 0;
       return;
     }
-    auto *set = AsMulti();
-    if (set->size() == 0) {
-      delete set;
-      storage_ = 0;
-    } else if (set->size() == 1) {
-      // Move-construct the lone InternedStringPtr into our slot. The public
-      // move ctor adopts the ref count without bump/drop, leaving storage_ as
-      // a clean InternedStringPtr (single mode is identified by an untagged
-      // non-zero storage_).
-      InternedStringPtr lone = std::move(*set->begin());
-      delete set;
+    if (!(*arr)[1]) {
+      InternedStringPtr lone = std::move((*arr)[0]);
+      delete arr;
       new (&storage_) InternedStringPtr(std::move(lone));
     }
+  }
+  // Demote Array8 -> Array4 when count drops to 4.
+  void DemoteArray8IfNeeded() {
+    auto *arr = GetArray8();
+    if ((*arr)[4]) {
+      return;  // still 5+ elements
+    }
+    auto *arr4 = new Array4();
+    for (std::size_t i = 0; i < kArray4Cap && (*arr)[i]; ++i) {
+      (*arr4)[i] = std::move((*arr)[i]);
+    }
+    delete arr;
+    SetArray4(arr4);
+  }
+  // Demote Set -> Array8 when set size drops to 8.
+  void DemoteSetIfPossible() {
+    auto *set = GetSet();
+    if (set->size() > kArray8Cap) {
+      return;
+    }
+    auto *arr8 = new Array8();
+    std::size_t i = 0;
+    for (const auto &elem : *set) {
+      (*arr8)[i++] = elem;  // copy bumps ref count
+    }
+    delete set;  // dec ref count for each element
+    SetArray8(arr8);
   }
 };
 static_assert(sizeof(BagOfInternedStringPtrs) == 8,
