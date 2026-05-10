@@ -35,8 +35,7 @@ class PatriciaNode {
  public:
   PatriciaNode() = default;
   absl::flat_hash_map<
-      std::string,
-      std::unique_ptr<PatriciaNode<T, Hasher, Equaler, SetType_>>>
+      std::string, std::unique_ptr<PatriciaNode<T, Hasher, Equaler, SetType_>>>
       children;
   int64_t subtree_values_count = 0;
   std::optional<SetType_> value;

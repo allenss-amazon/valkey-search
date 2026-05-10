@@ -123,8 +123,7 @@ class Numeric : public IndexBase {
       ABSL_NO_THREAD_SAFETY_ANALYSIS;
   using BTreeNumericIndex =
       BTreeNumeric<InternedStringPtr, absl::Hash<InternedStringPtr>,
-                   std::equal_to<InternedStringPtr>,
-                   BagOfInternedStringPtrs>;
+                   std::equal_to<InternedStringPtr>, BagOfInternedStringPtrs>;
   using KeySet = BagOfInternedStringPtrs;
   using EntriesRange = std::pair<BTreeNumericIndex::ConstIterator,
                                  BTreeNumericIndex::ConstIterator>;
@@ -139,10 +138,9 @@ class Numeric : public IndexBase {
     const InternedStringPtr& operator*() const override;
 
    private:
-    static bool NextKeys(
-        const Numeric::EntriesRange& range,
-        BTreeNumericIndex::ConstIterator& iter,
-        std::optional<KeySet::const_iterator>& keys_iter);
+    static bool NextKeys(const Numeric::EntriesRange& range,
+                         BTreeNumericIndex::ConstIterator& iter,
+                         std::optional<KeySet::const_iterator>& keys_iter);
     const EntriesRange& entries_range_;
     BTreeNumericIndex::ConstIterator entries_iter_;
     std::optional<KeySet::const_iterator> entry_keys_iter_;
