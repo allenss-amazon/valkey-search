@@ -29,24 +29,31 @@
 namespace valkey_search {
 
 template <typename T, typename Hasher = absl::Hash<T>,
-          typename Equaler = std::equal_to<T>>
+          typename Equaler = std::equal_to<T>,
+          typename SetType_ = absl::flat_hash_set<T, Hasher, Equaler>>
 class PatriciaNode {
  public:
   PatriciaNode() = default;
-  absl::flat_hash_map<std::string,
-                      std::unique_ptr<PatriciaNode<T, Hasher, Equaler>>>
+  absl::flat_hash_map<
+      std::string,
+      std::unique_ptr<PatriciaNode<T, Hasher, Equaler, SetType_>>>
       children;
   int64_t subtree_values_count = 0;
-  std::optional<absl::flat_hash_set<T, Hasher, Equaler>> value;
+  // SetType_ is required to default-construct to an empty state and to expose
+  // empty() / size() / insert() / erase() / begin() / end(). Both
+  // absl::flat_hash_set<T> and BagOfInternedStringPtrs satisfy that, so we
+  // store the set inline rather than wrapping it in std::optional.
+  SetType_ value;
   void PrintValue() {}
 };
 
 template <typename T, typename Hasher = absl::Hash<T>,
-          typename Equaler = std::equal_to<T>>
+          typename Equaler = std::equal_to<T>,
+          typename SetType_ = absl::flat_hash_set<T, Hasher, Equaler>>
 class PatriciaTree {
  public:
-  using SetType = absl::flat_hash_set<T, Hasher, Equaler>;
-  using PatriciaNodeType = PatriciaNode<T, Hasher, Equaler>;
+  using SetType = SetType_;
+  using PatriciaNodeType = PatriciaNode<T, Hasher, Equaler, SetType_>;
   PatriciaTree(bool case_sensitive)
       : root_(std::make_unique<PatriciaNodeType>()),
         case_sensitive_(case_sensitive) {}
@@ -56,11 +63,7 @@ class PatriciaTree {
     while (true) {
       node->subtree_values_count++;
       if (remaining_key.empty()) {
-        if (!node->value.has_value()) {
-          node->value.emplace(std::move(SetType{value}));
-        } else {
-          node->value.value().insert(value);
-        }
+        node->value.insert(value);
         return;
       }
       bool found = false;
@@ -101,14 +104,15 @@ class PatriciaTree {
     }
   }
 
-  // Returns the set of values for the given key. If exact_match is false,
-  // returns the set of values for the longest prefix of the key.
-  SetType *GetValue(absl::string_view key, bool exact_match) const {
+  // Returns a pointer to the set of values for the given key (nullptr if no
+  // matching node, or if the matched node has an empty set). If exact_match
+  // is false, returns the set at the longest matching prefix.
+  const SetType *GetValue(absl::string_view key, bool exact_match) const {
     PatriciaNodeType *node = GetLeafNodeForKey(key, exact_match);
     if (node == nullptr) {
       return nullptr;
     }
-    return !node->value.has_value() ? nullptr : &node->value.value();
+    return node->value.empty() ? nullptr : &node->value;
   }
 
   int64_t GetQualifiedElementsCount(absl::string_view key,
@@ -118,7 +122,7 @@ class PatriciaTree {
       return 0;
     }
     if (exact_match) {
-      return !node->value.has_value() ? 0 : node->value.value().size();
+      return static_cast<int64_t>(node->value.size());
     }
     return node->subtree_values_count;
   }
@@ -174,7 +178,7 @@ class PatriciaTree {
     }
 
     void DfsHelper(PatriciaNodeType *node) const {
-      if (node->value.has_value()) {
+      if (!node->value.empty()) {
         values_.push(node);
       }
       for (const auto &[child_key, child_node] : node->children) {
@@ -202,7 +206,7 @@ class PatriciaTree {
     TriePathIterator(PatriciaNodeType *root, absl::string_view str,
                      bool case_sensitive) {
       case_sensitive_ = case_sensitive;
-      if (root->value != std::nullopt) {
+      if (!root->value.empty()) {
         values_.push(root);
       }
       while (!str.empty()) {
@@ -210,7 +214,7 @@ class PatriciaTree {
         for (const auto &child : root->children) {
           if (str.compare(0, child.first.size(), child.first) == 0) {
             found = true;
-            if (child.second->value != std::nullopt) {
+            if (!child.second->value.empty()) {
               values_.push(child.second.get());
             }
             str = str.substr(child.first.size());
@@ -243,6 +247,10 @@ class PatriciaTree {
     return TriePathIterator(root_.get(), str, case_sensitive_);
   }
 
+  // Read-only access to the root for external structural walks (e.g. memory
+  // estimators that need to visit every node, not just value-bearing ones).
+  const PatriciaNodeType *Root() const { return root_.get(); }
+
  private:
   std::unique_ptr<PatriciaNodeType> root_;
   bool case_sensitive_;
@@ -266,12 +274,7 @@ class PatriciaTree {
   bool RemoveHelper(PatriciaNodeType *node, absl::string_view key,
                     const T &value) {
     if (key.empty()) {
-      if (!node->value) {
-        return false;  // Key not found
-      }
-      auto itr = node->value.value().find(value);
-      if (itr != node->value.value().end()) {
-        node->value.value().erase(itr);
+      if (node->value.erase(value) > 0) {
         node->subtree_values_count--;
         return true;
       }
@@ -287,9 +290,7 @@ class PatriciaTree {
             RemoveHelper(child_node, key.substr(common_prefix.size()), value);
         if (found) {
           node->subtree_values_count--;
-          if (child_node->children.empty() &&
-              (!child_node->value.has_value() ||
-               child_node->value.value().empty())) {
+          if (child_node->children.empty() && child_node->value.empty()) {
             node->children.erase(it);
           }
           return found;
