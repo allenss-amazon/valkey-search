@@ -36,9 +36,7 @@ namespace {
 inline uintptr_t SlotToStorage(void* p) {
   return reinterpret_cast<uintptr_t>(p);
 }
-inline void* StorageToSlot(uintptr_t s) {
-  return reinterpret_cast<void*>(s);
-}
+inline void* StorageToSlot(uintptr_t s) { return reinterpret_cast<void*>(s); }
 
 // rax free-callback — invoked once per surviving slot during raxFree.
 // The slot's bits are the bag's storage; adopting them into a local bag and
@@ -211,8 +209,7 @@ absl::StatusOr<bool> Tag::ModifyRecord(const InternedStringPtr& key,
         absl::StrCat("Key `", key->Str(), "` not found"));
   }
   auto& tag_info = it->second;
-  auto old_parsed_tags =
-      ParseRecordTags(*tag_info.raw_tag_string, separator_);
+  auto old_parsed_tags = ParseRecordTags(*tag_info.raw_tag_string, separator_);
 
   for (const auto& tag : new_parsed_tags) {
     if (!old_parsed_tags.contains(tag)) {
