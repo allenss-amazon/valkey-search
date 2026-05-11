@@ -441,21 +441,19 @@ TEST_F(BagOfInternedStringPtrsTest, IterationVisitsEverythingExactlyOnce) {
 
 TEST_F(BagOfInternedStringPtrsTest, IteratorIsStlForwardIterator) {
   using It = BagOfInternedStringPtrs::const_iterator;
+  static_assert(std::is_same_v<std::iterator_traits<It>::iterator_category,
+                               std::forward_iterator_tag>);
   static_assert(
-      std::is_same_v<std::iterator_traits<It>::iterator_category,
-                     std::forward_iterator_tag>);
-  static_assert(std::is_same_v<std::iterator_traits<It>::value_type,
-                               InternedStringPtr>);
+      std::is_same_v<std::iterator_traits<It>::value_type, InternedStringPtr>);
   // Usable with STL algorithms.
   auto a = StringInternStore::Intern("stl_a");
   auto b = StringInternStore::Intern("stl_b");
   BagOfInternedStringPtrs bag;
   bag.insert(a);
   bag.insert(b);
-  auto found = std::find_if(bag.begin(), bag.end(),
-                            [&](const InternedStringPtr& p) {
-                              return p->Str() == "stl_b";
-                            });
+  auto found = std::find_if(
+      bag.begin(), bag.end(),
+      [&](const InternedStringPtr& p) { return p->Str() == "stl_b"; });
   ASSERT_NE(found, bag.end());
   EXPECT_EQ((*found)->Str(), "stl_b");
   std::vector<InternedStringPtr> copied(bag.begin(), bag.end());

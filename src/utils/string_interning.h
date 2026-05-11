@@ -178,8 +178,9 @@ inline std::ostream &operator<<(std::ostream &os,
 }  // namespace valkey_search
 
 // std::hash specialization for InternedStringPtr. Defined here, before any
-// flat_hash_set<InternedStringPtr> instantiation, so the BagOfInternedStringPtrs
-// definition below (which references InternedStringSet) can compile.
+// flat_hash_set<InternedStringPtr> instantiation, so the
+// BagOfInternedStringPtrs definition below (which references InternedStringSet)
+// can compile.
 template <>
 struct std::hash<valkey_search::InternedStringPtr> {
   std::size_t operator()(const valkey_search::InternedStringPtr &sp) const {
@@ -573,7 +574,7 @@ class BagOfInternedStringPtrs {
   using Array8 = std::array<InternedStringPtr, kArray8Cap>;
 
   static constexpr uintptr_t kTagMask = 0x3;
-  static constexpr uintptr_t kSingleTag = 0;   // also used for empty
+  static constexpr uintptr_t kSingleTag = 0;  // also used for empty
   static constexpr uintptr_t kArray4Tag = 1;
   static constexpr uintptr_t kArray8Tag = 2;
   static constexpr uintptr_t kSetTag = 3;
