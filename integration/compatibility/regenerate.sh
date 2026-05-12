@@ -37,10 +37,17 @@ cd "${ROOT_DIR}"
 
 # Source the generator list from compatibility/__init__.py so adding a new
 # generator only requires editing one place.
-mapfile -t GENERATOR_FILES < <(PYTHONPATH=integration "${PYTHON}" -c \
+GENERATOR_FILES=()
+while IFS= read -r line; do
+    GENERATOR_FILES+=("${line}")
+done < <(PYTHONPATH=integration "${PYTHON}" -c \
     "from compatibility import GENERATORS
 for g in GENERATORS: print(g['generator'])")
-mapfile -t ANSWER_FILES < <(PYTHONPATH=integration "${PYTHON}" -c \
+
+ANSWER_FILES=()
+while IFS= read -r line; do
+    ANSWER_FILES+=("${line}")
+done < <(PYTHONPATH=integration "${PYTHON}" -c \
     "from compatibility import GENERATORS
 for g in GENERATORS: print(g['answers'])")
 
