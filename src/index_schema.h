@@ -11,6 +11,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -20,6 +21,7 @@
 #include "absl/container/flat_hash_map.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
 #include "absl/synchronization/blocking_counter.h"
 #include "absl/synchronization/mutex.h"
@@ -50,6 +52,12 @@ struct SearchParameters;
 namespace valkey_search {
 bool ShouldBlockClient(ValkeyModuleCtx *ctx, bool inside_multi_exec,
                        bool from_backfill);
+
+inline absl::Status GenerateIndexNotFoundError(uint32_t db_num,
+                                               absl::string_view name) {
+  return absl::NotFoundError(absl::StrFormat(
+      "Index with name '%s' not found in database %d", name, db_num));
+}
 
 using Key = InternedStringPtr;
 using MutationSequenceNumber = uint64_t;
@@ -235,6 +243,7 @@ class IndexSchema : public KeyspaceEventSubscription,
     // Queries waiting for this mutation to complete
     std::vector<std::unique_ptr<query::SearchParameters>> waiting_queries;
     MutationSequenceNumber sequence_number{0};
+    std::vector<uint8_t> weighted_buffer;
     bool consume_in_progress{false};
     bool from_backfill{false};
     bool from_multi{false};
@@ -245,6 +254,7 @@ class IndexSchema : public KeyspaceEventSubscription,
     return time_sliced_mutex_;
   }
   void MarkAsDestructing();
+  bool IsMarkedDestructing() { return is_destructing_; };
   void ProcessMultiQueue();
   void SubscribeToVectorExternalizer(absl::string_view attribute_identifier,
                                      indexes::VectorBase *vector_index);
@@ -272,12 +282,17 @@ class IndexSchema : public KeyspaceEventSubscription,
     }
   };
 
-  MutationSequenceNumber GetIndexMutationSequenceNumber(const Key &key) const {
-    absl::MutexLock lock(&mutated_records_mutex_);
-    auto itr = index_key_info_.find(key);
-    CHECK(itr != index_key_info_.end())
-        << "Key not found: " << vmsdk::config::RedactIfNeeded(key->Str());
-    return itr->second.mutation_sequence_number_;
+  // REQUIRES: time_sliced_mutex_ held in read phase
+  void PopulateIndexMutationSequenceNumbers(
+      std::vector<indexes::Neighbor> &neighbors) const
+      ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_) {
+    for (auto &n : neighbors) {
+      auto itr = index_key_info_.find(n.external_id);
+      CHECK(itr != index_key_info_.end())
+          << "Key not found: "
+          << vmsdk::config::RedactIfNeeded(n.external_id->Str());
+      n.sequence_number = itr->second.mutation_sequence_number_;
+    }
   }
 
   MutationSequenceNumber GetDbMutationSequenceNumber(const Key &key) const {
@@ -289,10 +304,17 @@ class IndexSchema : public KeyspaceEventSubscription,
   }
 
   // Accessor for global key map (for negation queries)
-  // Safe to call from reader threads - protected by mutated_records_mutex_
-  const IndexKeyInfoMap &GetIndexKeyInfo() const { return index_key_info_; }
+  // REQUIRES: time_sliced_mutex_ held in read phase
+  const IndexKeyInfoMap &GetIndexKeyInfo() const
+      ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_) {
+    return index_key_info_;
+  }
 
-  size_t GetIndexKeyInfoSize() const { return index_key_info_.size(); }
+  // REQUIRES: time_sliced_mutex_ held in read phase
+  size_t GetIndexKeyInfoSize() const
+      ABSL_SHARED_LOCKS_REQUIRED(time_sliced_mutex_) {
+    return index_key_info_.size();
+  }
 
   // Unit test only
   void SetDbMutationSequenceNumber(const Key &key,
@@ -301,8 +323,8 @@ class IndexSchema : public KeyspaceEventSubscription,
   }
   // Unit test only
   void SetIndexMutationSequenceNumber(const Key &key,
-                                      MutationSequenceNumber sequence_number) {
-    absl::MutexLock lock(&mutated_records_mutex_);
+                                      MutationSequenceNumber sequence_number)
+      ABSL_EXCLUSIVE_LOCKS_REQUIRED(time_sliced_mutex_) {
     index_key_info_[key].mutation_sequence_number_ = sequence_number;
   }
 
@@ -353,6 +375,13 @@ class IndexSchema : public KeyspaceEventSubscription,
     return attributes_;
   }
 
+  // Returns attributes sorted by alias (map key) for deterministic ordering.
+  // Use this instead of iterating attributes_ directly in any serialization
+  // path (RDB, FT.INFO, protobuf).
+  std::vector<
+      std::reference_wrapper<const std::pair<const std::string, Attribute>>>
+  GetSortedAttributes() const;
+
  protected:
   IndexSchema(ValkeyModuleCtx *ctx,
               const data_model::IndexSchema &index_schema_proto,
@@ -397,8 +426,12 @@ class IndexSchema : public KeyspaceEventSubscription,
   MutationSequenceNumber schema_mutation_sequence_number_{0};
   vmsdk::MainThreadAccessGuard<absl::flat_hash_map<Key, DbKeyInfo>>
       db_key_info_;  // Mainthread.
-  IndexKeyInfoMap index_key_info_ ABSL_GUARDED_BY(
-      mutated_records_mutex_);  // updates are guarded by mutated_records_mutex_
+
+  // For proper sequencing and thread-safety, we separate reads/writes into
+  // the corresponding time slice mutex phases. Within the write phase,
+  // exclusion is provided by mutated_records_mutex_.
+  IndexKeyInfoMap index_key_info_ ABSL_GUARDED_BY(time_sliced_mutex_);
+
   struct BackfillJob {
     BackfillJob() = delete;
     BackfillJob(ValkeyModuleCtx *ctx, absl::string_view name, int db_num);
@@ -459,9 +492,14 @@ class IndexSchema : public KeyspaceEventSubscription,
                           bool from_backfill, bool block_client,
                           bool from_multi)
       ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
+
+  size_t ComputeWeightedBufferSize(const MutatedAttributes &attributes) const;
+
+  // REQUIRES: time_sliced_mutex_ held in write phase
   std::optional<MutatedAttributes> ConsumeTrackedMutatedAttribute(
       const Key &key, bool first_time)
       ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
+
   size_t GetMutatedRecordsSize() const
       ABSL_LOCKS_EXCLUDED(mutated_records_mutex_);
   /**
@@ -499,6 +537,7 @@ class IndexSchema : public KeyspaceEventSubscription,
   FRIEND_TEST(IndexSchemaRDBTest, ComprehensiveSkipLoadTest);
   FRIEND_TEST(IndexSchemaFriendTest, ConsistencyTest);
   FRIEND_TEST(IndexSchemaFriendTest, MutatedAttributes);
+  FRIEND_TEST(IndexSchemaFriendTest, WeightedBuffer);
   FRIEND_TEST(IndexSchemaFriendTest, MutatedAttributesSanity);
   FRIEND_TEST(ValkeySearchTest, Info);
   FRIEND_TEST(OnSwapDBCallbackTest, OnSwapDBCallback);

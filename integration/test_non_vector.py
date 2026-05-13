@@ -7,6 +7,7 @@ import random
 from valkey.cluster import ValkeyCluster
 from valkey_search_test_case import ValkeySearchClusterTestCase
 import time
+import pytest
 
 """
 This file contains tests for non vector (numeric and tag) queries on Hash/JSON documents in Valkey Search - in CME / CMD.
@@ -153,6 +154,25 @@ def validate_limit_queries(client: Valkey):
     assert result[0] == 4  # Total count only
     assert len(result) == 1
 
+def validate_bare_wildcard_queries(client: Valkey):
+    """
+        Test bare '*' match-all behavior for non-vector FT.SEARCH in DIALECT 2.
+    """
+    result = client.execute_command("FT.SEARCH", "products", "*", "DIALECT", "2")
+    assert result[0] == 4
+
+    result = client.execute_command("FT.SEARCH", "products", "*", "NOCONTENT", "DIALECT", "2")
+    assert result[0] == 4
+    assert len(result) == 5
+
+    result = client.execute_command("FT.SEARCH", "products", "*", "LIMIT", "0", "2", "NOCONTENT", "DIALECT", "2")
+    assert result[0] == 4
+    assert len(result) == 3
+
+    result = client.execute_command("FT.SEARCH", "products", "*", "SORTBY", "price", "ASC", "NOCONTENT", "DIALECT", "2")
+    assert result[0] == 4
+    assert len(result) == 5
+
 def create_bulk_data_standalone(client: Valkey):
     """
         Create bulk data for standalone testing.
@@ -239,6 +259,45 @@ def validate_bulk_limit_queries(client: Valkey):
     assert actual_results <= 3  # Should return at most 3 results
     assert actual_results == min(3, max(0, total_count - 2))  # Respect offset of 2
 
+def validate_tag_and_negate_queries(client: Valkey):
+    """
+        Test TAG and negated TAG queries using the bulk_products index (2500 docs, 10 categories).
+        Reuses the bulk data created by create_bulk_data_standalone: category = "cat0".."cat9",
+        each with 250 docs.
+    """
+    # Exact tag match
+    result = client.execute_command("FT.SEARCH", "bulk_products", "@category:{cat0}", "NOCONTENT", "LIMIT", "0", "0")
+    assert result[0] == 250
+
+    # Tag OR
+    result = client.execute_command("FT.SEARCH", "bulk_products", "@category:{cat0|cat1}", "NOCONTENT", "LIMIT", "0", "0")
+    assert result[0] == 500
+
+    # Nonexistent tag
+    result = client.execute_command("FT.SEARCH", "bulk_products", "@category:{nonexistent}", "NOCONTENT", "LIMIT", "0", "0")
+    assert result[0] == 0
+
+    # Negate single category: 2500 - 250 = 2250
+    result = client.execute_command("FT.SEARCH", "bulk_products", "-@category:{cat0}", "NOCONTENT", "LIMIT", "0", "0")
+    assert result[0] == 2250
+
+    # Negate two categories: 2500 - 500 = 2000
+    result = client.execute_command("FT.SEARCH", "bulk_products", "-@category:{cat0|cat1}", "NOCONTENT", "LIMIT", "0", "0")
+    assert result[0] == 2000
+
+    # Positive tag AND negate: cat0 AND NOT rating=3.0
+    # cat0 = 250 docs. rating cycles 3.0/4.0/5.0, so 1/3 of cat0 has rating 3.0.
+    # cat0 docs are at indices 0,10,20,...2490. rating=3.0 when i%3==0.
+    # cat0 AND rating=3.0: i%10==0 AND i%3==0 => i%30==0 => 84 docs (0..2490 step 30 = 83+1=84)
+    # Result: 250 - 84 = 166
+    result = client.execute_command("FT.SEARCH", "bulk_products", "@category:{cat0} @rating:[4.0 +inf]", "NOCONTENT", "LIMIT", "0", "0")
+    assert result[0] == 166, f"Expected 166, got {result[0]}"
+
+    # Negate with LIMIT pagination
+    result = client.execute_command("FT.SEARCH", "bulk_products", "-@category:{cat0}", "NOCONTENT", "LIMIT", "0", "50")
+    assert result[0] == 2250
+    assert len(result) - 1 == 50
+
 def validate_aggregate_queries(client: Valkey):
     """
         Test FT.AGGREGATE with numeric and tag queries.
@@ -256,6 +315,13 @@ def validate_aggregate_queries(client: Valkey):
         "LOAD", "1", "category"
     )
     assert result[0] == 2
+
+    for command in (
+        ("FT.AGGREGATE", "products", "@price:[1 +inf]", "APPLY", "", "AS", "result"),
+        ("FT.AGGREGATE", "products", "@price:[1 +inf]", "FILTER", ""),
+    ):
+        with pytest.raises(ResponseError, match=r"Invalid or missing expression"):
+            client.execute_command(*command)
 
 def validate_aggregate_complex_queries(client: Valkey):
     """
@@ -476,6 +542,8 @@ class TestNonVector(ValkeySearchTestCaseBase):
         validate_non_vector_queries(client)
         # Test LIMIT functionality
         validate_limit_queries(client)
+        # Test bare wildcard functionality
+        validate_bare_wildcard_queries(client)
         # Test AGGREGATE functionality
         validate_aggregate_queries(client)
 
@@ -516,6 +584,14 @@ class TestNonVector(ValkeySearchTestCaseBase):
         create_bulk_data_standalone(client)
         validate_bulk_limit_queries(client)
 
+    def test_tag_and_negate_at_scale(self):
+        """
+            Test TAG and negated TAG queries with bulk data to exercise the tag index at scale.
+        """
+        client: Valkey = self.server.get_new_client()
+        create_bulk_data_standalone(client)
+        validate_tag_and_negate_queries(client)
+
 class TestNonVectorCluster(ValkeySearchClusterTestCase):
 
     def test_non_vector_cluster(self):
@@ -549,3 +625,87 @@ class TestNonVectorCluster(ValkeySearchClusterTestCase):
         for doc in aggregate_complex_json_docs:
             assert cluster_client.execute_command(*doc) == b"OK"
         validate_aggregate_complex_queries(cluster_client)
+    
+    def test_max_search_keys_fetch_limited(self):
+        """
+        Test max-nonvector-search-results-fetched with non-vector fields.
+        Tests both prefilter path (numeric/tag queries) and optimized path (text queries).
+        """        
+        cluster_client: ValkeyCluster = self.new_cluster_client()
+        client: Valkey = self.new_client_for_primary(0)
+
+        
+        # Set config on all cluster nodes 
+        for i in range(self.CLUSTER_SIZE):
+            node_client = self.new_client_for_primary(i)
+            assert node_client.execute_command("CONFIG SET search.max-nonvector-search-results-fetched 5") == b"OK"
+    
+        # Create index with numeric, tag, AND text fields
+        index_cmd = "FT.CREATE idx ON HASH PREFIX 1 doc: SCHEMA price NUMERIC category TAG description TEXT"
+        assert client.execute_command(index_cmd) == b"OK"
+        # Insert 100 documents with all field types
+        for i in range(100):
+            price = 10 + i
+            category = "cat" + str(i % 5)
+            description = f"product laptop model{i}"
+            cluster_client.execute_command("HSET", f"doc:{i}", "price", str(price), "category", category, "description", description)
+        
+        # Query with limit 100 but should be restricted by the config
+        # Uses tag+numeric AND to route through EvaluatePrefilteredKeys (prefilter path)
+        # In cluster mode with 3 nodes: each node fetch-limits to 5, total ~15 returned
+        result = client.execute_command("FT.SEARCH", "idx", "@category:{cat0} @price:[0 +inf]", "LIMIT", "0", "100")
+        
+        # Verify fetch-limited in cluster mode:
+        #  In cluster: 3 nodes × 5 limit = ~15 results (may vary by hash distribution)
+        assert 10 <= result[0] <= 20, f"Expected ~15 after limiting the fetch count, got {result[0]}"
+        actual_results = (len(result) - 1) // 2
+        assert actual_results == result[0]
+        
+        # Test with NOCONTENT
+        result_nocontent = client.execute_command("FT.SEARCH", "idx", "@price:[0 +inf]", "LIMIT", "0", "100", "NOCONTENT")
+        assert 10 <= result_nocontent[0] <= 20, f"Expected ~15 after limiting the fetch count, got {result_nocontent[0]}"
+        actual_keys = len(result_nocontent) - 1
+        assert actual_keys == result_nocontent[0]
+        
+        # Test user's LIMIT with fetch-limited
+        # Truncated to ~15, then LIMIT 0 5 returns first 5 of those
+        result_limit = client.execute_command("FT.SEARCH", "idx", "@category:{cat0} @price:[0 +inf]", "LIMIT", "0", "5")
+        assert 10 <= result_limit[0] <= 20, f"Expected ~15 after limiting the fetch count, got {result_limit[0]}"
+        actual_limited = (len(result_limit) - 1) // 2
+        assert actual_limited == 5, f"Expected 5 results after user LIMIT, got {actual_limited}"
+        
+        # Test LIMIT with offset: LIMIT 5 10 (skip first 5, return next 10)
+        result_offset = client.execute_command("FT.SEARCH", "idx", "@price:[0 +inf]", "LIMIT", "5", "10")
+        assert 10 <= result_offset[0] <= 20, f"Expected ~15 after limiting the fetch count, got {result_offset[0]}"
+        actual_offset = (len(result_offset) - 1) // 2
+        # Should get ~10 results (15 total - 5 skipped = 10 remaining, capped by user's 10)
+        assert 5 <= actual_offset <= 12, f"Expected ~10 results with LIMIT 5 10, got {actual_offset}"
+        
+        # Test LIMIT with offset exceeding available: LIMIT 5 20 (skip 5, request 20)
+        result_exceed = client.execute_command("FT.SEARCH", "idx", "@price:[0 +inf]", "LIMIT", "5", "20")
+        assert 10 <= result_exceed[0] <= 20, f"Expected ~15 after limiting the fetch count, got {result_exceed[0]}"
+        actual_exceed = (len(result_exceed) - 1) // 2
+        # Should still get ~10 results (all remaining after offset 5)
+        assert 5 <= actual_exceed <= 12, f"Expected ~10 results with LIMIT 5 20, got {actual_exceed}"
+        
+        # TEXT QUERY TESTS
+        result_text = client.execute_command("FT.SEARCH", "idx", "@description:laptop", "LIMIT", "0", "100")
+        assert 10 <= result_text[0] <= 20, f"Expected ~15 after limiting the fetch count for text query, got {result_text[0]}"
+        actual_text = (len(result_text) - 1) // 2
+        assert actual_text == result_text[0], f"Text query: Actual count should match result count"
+        
+        # Test text query with NOCONTENT
+        result_text_nocontent = client.execute_command("FT.SEARCH", "idx", "@description:laptop", "LIMIT", "0", "100", "NOCONTENT")
+        assert 10 <= result_text_nocontent[0] <= 20, f"Expected ~15 after limiting the fetch count for text NOCONTENT, got {result_text_nocontent[0]}"
+        actual_text_keys = len(result_text_nocontent) - 1
+        assert actual_text_keys == result_text_nocontent[0], f"Text NOCONTENT: key count should match fetch-limited count"
+        
+        # Test text query with user LIMIT
+        result_text_limit = client.execute_command("FT.SEARCH", "idx", "@description:laptop", "LIMIT", "0", "5")
+        assert 10 <= result_text_limit[0] <= 20, f"Expected ~15 after limiting the fetch count for text LIMIT, got {result_text_limit[0]}"
+        actual_text_limited = (len(result_text_limit) - 1) // 2
+        assert actual_text_limited == 5, f"Expected 5 results after user LIMIT on text query, got {actual_text_limited}"
+
+        # Verify fetch-limited queries metric
+        client.execute_command("CONFIG SET search.info-developer-visible yes")
+        assert client.info("search").get("search_nonvector_results_fetched_limited_count", 0) == 8
