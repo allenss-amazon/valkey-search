@@ -67,8 +67,8 @@ void OnShutdownCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent eid,
   //      thread.
   vmsdk::debug::ClearAllPausePoints();
   ValkeySearch::Instance().JoinAllThreadPools();
-  SchemaManager::Instance().OnShutdownCallback(ctx, eid, subevent, data);
   ValkeySearch::Instance().OnShutdownCallback();
+  SchemaManager::Instance().OnShutdownCallback(ctx, eid, subevent, data);
 }
 
 void AtForkPrepare() { ValkeySearch::Instance().AtForkPrepare(); }
