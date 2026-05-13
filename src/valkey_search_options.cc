@@ -145,6 +145,14 @@ static auto use_coordinator = config::BooleanBuilder(kUseCoordinator, false)
                                   .Hidden()  // can only be set during start-up
                                   .Build();
 
+// Not allowing replace delete is aligned with RediSearch
+constexpr absl::string_view kHNSWAllowReplaceDeleted{
+    "hnsw-allow-replace-deleted"};
+static auto hnsw_allow_replace_deleted =
+    config::BooleanBuilder(kHNSWAllowReplaceDeleted, false)  // default false
+        .Dev()
+        .Build();
+
 // Register an enumerator for the log level
 static const std::vector<std::string_view> kLogLevelNames = {
     VALKEYMODULE_LOGLEVEL_WARNING,
@@ -519,6 +527,20 @@ static auto max_nonvector_search_results_fetched =
         kMaximumMaxNonVectorSearchResultsFetched)  // UINT32_MAX
         .Build();
 
+/// Register the "--query-string-depth" flag. Controls the depth of the query
+/// string parsing from the FT.SEARCH cmd.
+constexpr absl::string_view kQueryStringDepthConfig{"query-string-depth"};
+constexpr uint32_t kDefaultQueryStringDepth{1000};
+constexpr uint32_t kMinimumQueryStringDepth{1};
+static auto query_string_depth =
+    config::NumberBuilder(kQueryStringDepthConfig,   // name
+                          kDefaultQueryStringDepth,  // default size
+                          kMinimumQueryStringDepth,  // min size
+                          UINT_MAX)                  // max size
+        .WithValidationCallback(CHECK_RANGE(kMinimumQueryStringDepth, UINT_MAX,
+                                            kQueryStringDepthConfig))
+        .Build();
+
 uint32_t GetQueryStringBytes() { return query_string_bytes->GetValue(); }
 
 vmsdk::config::Number& GetHNSWBlockSize() {
@@ -560,6 +582,14 @@ const vmsdk::config::Boolean& GetSkipCorruptedInternalUpdateEntries() {
 
 vmsdk::config::Enum& GetLogLevel() {
   return dynamic_cast<vmsdk::config::Enum&>(*log_level);
+}
+
+const config::Boolean& GetHNSWAllowReplaceDeleted() {
+  return dynamic_cast<const config::Boolean&>(*hnsw_allow_replace_deleted);
+}
+
+config::Boolean& GetHNSWAllowReplaceDeletedMutable() {
+  return dynamic_cast<config::Boolean&>(*hnsw_allow_replace_deleted);
 }
 
 absl::Status Reset() {
@@ -644,6 +674,73 @@ config::Number& GetRaxTargetMutexPoolSize() {
 vmsdk::config::Number& GetMaxNonVectorSearchResultsFetched() {
   return dynamic_cast<vmsdk::config::Number&>(
       *max_nonvector_search_results_fetched);
+}
+
+vmsdk::config::Number& GetQueryStringDepth() {
+  return dynamic_cast<vmsdk::config::Number&>(*query_string_depth);
+}
+
+/// Register the "--mutation-weight-vector" flag. Controls the weight multiplier
+/// for vector index types in mutation queue entries (scale: 100 = 1.0x)
+constexpr absl::string_view kMutationWeightVectorConfig{
+    "mutation-weight-vector"};
+constexpr uint32_t kDefaultMutationWeightVector{130};
+constexpr uint32_t kMinimumMutationWeight{0};
+constexpr uint32_t kMaximumMutationWeight{10000};
+static auto mutation_weight_vector =
+    config::NumberBuilder(kMutationWeightVectorConfig,
+                          kDefaultMutationWeightVector, kMinimumMutationWeight,
+                          kMaximumMutationWeight)
+        .Dev()
+        .Build();
+
+/// Register the "--mutation-weight-text" flag. Controls the weight multiplier
+/// for text index types in mutation queue entries (scale: 100 = 1.0x)
+constexpr absl::string_view kMutationWeightTextConfig{"mutation-weight-text"};
+constexpr uint32_t kDefaultMutationWeightText{550};
+static auto mutation_weight_text =
+    config::NumberBuilder(kMutationWeightTextConfig, kDefaultMutationWeightText,
+                          kMinimumMutationWeight, kMaximumMutationWeight)
+        .Dev()
+        .Build();
+
+/// Register the "--mutation-weight-numeric" flag. Controls the weight
+/// multiplier for numeric index types in mutation queue entries
+/// (scale: 100 = 1.0x)
+constexpr absl::string_view kMutationWeightNumericConfig{
+    "mutation-weight-numeric"};
+constexpr uint32_t kDefaultMutationWeightNumeric{430};
+static auto mutation_weight_numeric =
+    config::NumberBuilder(kMutationWeightNumericConfig,
+                          kDefaultMutationWeightNumeric, kMinimumMutationWeight,
+                          kMaximumMutationWeight)
+        .Dev()
+        .Build();
+
+/// Register the "--mutation-weight-tag" flag. Controls the weight multiplier
+/// for tag index types in mutation queue entries (scale: 100 = 1.0x)
+constexpr absl::string_view kMutationWeightTagConfig{"mutation-weight-tag"};
+constexpr uint32_t kDefaultMutationWeightTag{330};
+static auto mutation_weight_tag =
+    config::NumberBuilder(kMutationWeightTagConfig, kDefaultMutationWeightTag,
+                          kMinimumMutationWeight, kMaximumMutationWeight)
+        .Dev()
+        .Build();
+
+config::Number& GetMutationWeightVector() {
+  return dynamic_cast<config::Number&>(*mutation_weight_vector);
+}
+
+config::Number& GetMutationWeightText() {
+  return dynamic_cast<config::Number&>(*mutation_weight_text);
+}
+
+config::Number& GetMutationWeightNumeric() {
+  return dynamic_cast<config::Number&>(*mutation_weight_numeric);
+}
+
+config::Number& GetMutationWeightTag() {
+  return dynamic_cast<config::Number&>(*mutation_weight_tag);
 }
 
 }  // namespace options
