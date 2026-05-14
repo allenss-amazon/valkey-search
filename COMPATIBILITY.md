@@ -72,11 +72,11 @@ This section describes areas where Valkey Search intentionally diverges from Red
 
 ### Cluster and sharding behavior
 
-**What differs.** Redisearch relies on a separate RSCoordinator component, along with specific command options, to carry out cluster-wide operations. Valkey Search has this functionality built in: no separate component and no special command-level options are required to obtain cluster-wide behavior. Valkey Search provides cluster-wide consistency for both index-mutation commands — `FT.CREATE` and `FT.DROPINDEX` — and query commands — `FT.INFO`, `FT.SEARCH`, and `FT.AGGREGATE`. Cluster-wide operations are retried as needed until whole-cluster consistency is obtained, and time out if that cannot be achieved within the operation's timeout window.
+**What differs.** Redisearch relies on a separate RSCoordinator component, along with specific command options, to carry out cluster-wide operations. Valkey Search has this functionality built in: no separate component and no special command-level options are required to obtain cluster-wide behavior. Valkey Search provides cluster-wide consistency for both index-mutation commands — `FT.CREATE` and `FT.DROPINDEX` — and query commands — `FT.INFO`, `FT.SEARCH`, and `FT.AGGREGATE`. Cluster-wide operations are retried as needed until whole-cluster consistency is obtained, and time out if that cannot be achieved within the operation's timeout window. Examples of persistent cluster inconsistency include: shard-down, network partition, etc.
 
 **Why.** Folding cluster coordination into the module itself removes a separate deployable component and the operational complexity that comes with it, and produces a deployment model that aligns with how Valkey's own cluster mode is operated. Making cluster-wide consistency the default behavior — rather than something the caller has to opt into with special options — means applications do not need to know whether they are talking to a clustered deployment or a single-node deployment to get correct results.
 
-**Migration impact.** Applications no longer need to invoke a separate RSCoordinator component or add cluster-specific options to their commands; any such options should be removed as part of migration. Operational tooling that deployed, monitored, or scaled the Sentinel component will no longer apply. Callers should be prepared for the possibility that a cluster-wide operation may return a timeout error when cluster-wide consistency cannot be established within the operation's timeout, and should handle that case — for example by retrying at the application level or surfacing the failure to the user — rather than treating success as guaranteed.
+**Migration impact.** Applications no longer need to invoke a separate RSCoordinator component or add cluster-specific options to their commands; any such options should be removed as part of migration. Operational tooling that deployed, monitored, or scaled the RScoordinator component will no longer apply. Callers should be prepared for the possibility that a cluster-wide operation may return a timeout error when cluster-wide consistency cannot be established within the operation's timeout, and should handle that case — for example by retrying at the application level or surfacing the failure to the user — rather than treating success as guaranteed.
 
 ### Persistence and on-disk index format
 
@@ -142,8 +142,28 @@ Audit the application's queries and identify any that (a) have no defined sort o
 
 Within each document returned by `FT.SEARCH` or `FT.AGGREGATE`, the order in which the document's attributes (attribute name / value pairs) appear inside the reply is not guaranteed to match between Redisearch and Valkey Search (see _Query language and semantics_ above). Standard Redisearch client libraries parse these replies into name-keyed maps or structured records and are not affected. Custom or hand-rolled result-parsing code, however, may be reading fields by position — for example, "the value at index 3 is the `price` field" — and will break when the attributes come back in a different sequence. Review any such code and change it to look up attributes by name rather than by position.
 
-## Known Compatibility Defects
+## Compatibility Defects
 
-_(Placeholder — under development.)_
+Valkey Search follows the rules of [SemVer](http://semver.org) which governs the ability to correct compatibility defects (bugs). The Valkey Search project will apply the following rules for addressing compatibility bugs:
+
+1. Previously released functionality that is determined to be a compatibility defect will not be removed. The corrected behavior will be implemented side-by-side and a "feature flag" will be able to select either the new or old behavior. The feature flag will be controlled through the standard configuration machinery.
+
+2. Following the SemVer rules, in a minor or patch release, the default value of any new feature flag will be to retain the old functionality. Users desiring the new behavior will have to reconfigure the feature flag accordingly.
+
+3. In a major version, all compatibility feature flags will have their default values switched to the new (compatible) behavior. The old behavior is retained, but is deprecated. Users desiring the old behavior can reconfigure accordingly.
+
+4. The settings of the compatibility flags must be identical across a cluster (including CMD's replicas) to ensure reliable operation. Problems associated with split configured clusters are out of scope.
+
+5. There is no requirement that there be a 1:1 mapping between individual feature flags and specific bugs. It's possible that multiple compatibility bugs may be controlled by the same feature flag, provided that the fixes are all in the same release. This ensures it is possible to configure newer releases to match the behavior of any specific previous release.
+
+6. Feature flags endure for a minimum of two major releases. For example, suppose a defect is fixed in release 2.0.5. The associated feature flag will be available but deprecated in the 3.x and 4.x releases. The deprecated behavior could be removed in the 5.x release.
+
+The previous rules will not disallow the single feature flag mechanism. In this mechanism, there is a single configurable that is set to a specific release value and this controls the behavior. Following the rules above. The default value of the single configurable will be the current major release with a minor release and patch number of 0, i.e., N.0.0.
+
+### Known Compatibility Defects
 
 This section will enumerate known defects in surfaces that are intended to be compatible with Redisearch under the Expected Compatibility contract above. Items listed here are bugs, not design choices, and are tracked for resolution rather than documented as permanent differences.
+
+| Flag Name          | Introduced Release | Description |
+| ------------------ | ------------------ | ----------- |
+| under construction | n/a                |             |
