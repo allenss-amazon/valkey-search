@@ -14,8 +14,8 @@
 
 #include "absl/container/btree_map.h"
 #include "gtest/gtest.h"
-#include "vmsdk/src/testing_infra/utils.h"
 #include "src/indexes/text/posting.h"
+#include "vmsdk/src/testing_infra/utils.h"
 
 namespace valkey_search::indexes::text {
 

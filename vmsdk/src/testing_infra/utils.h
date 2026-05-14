@@ -21,26 +21,26 @@
 
 using ::testing::TestWithParam;
 
-#define VMSDK_EXPECT_DEATH(statement, matcher)                    \
-  {                                                               \
-    struct rlimit vmsdk_saved_core_limit_;                        \
-    getrlimit(RLIMIT_CORE, &vmsdk_saved_core_limit_);            \
-    struct rlimit vmsdk_no_core_ = vmsdk_saved_core_limit_;      \
-    vmsdk_no_core_.rlim_cur = 0;                                 \
-    setrlimit(RLIMIT_CORE, &vmsdk_no_core_);                     \
-    EXPECT_DEATH(statement, matcher);                             \
-    setrlimit(RLIMIT_CORE, &vmsdk_saved_core_limit_);            \
+#define VMSDK_EXPECT_DEATH(statement, matcher)              \
+  {                                                         \
+    struct rlimit vmsdk_saved_core_limit_;                  \
+    getrlimit(RLIMIT_CORE, &vmsdk_saved_core_limit_);       \
+    struct rlimit vmsdk_no_core_ = vmsdk_saved_core_limit_; \
+    vmsdk_no_core_.rlim_cur = 0;                            \
+    setrlimit(RLIMIT_CORE, &vmsdk_no_core_);                \
+    EXPECT_DEATH(statement, matcher);                       \
+    setrlimit(RLIMIT_CORE, &vmsdk_saved_core_limit_);       \
   }
 
-#define VMSDK_ASSERT_DEATH(statement, matcher)                    \
-  {                                                               \
-    struct rlimit vmsdk_saved_core_limit_;                        \
-    getrlimit(RLIMIT_CORE, &vmsdk_saved_core_limit_);            \
-    struct rlimit vmsdk_no_core_ = vmsdk_saved_core_limit_;      \
-    vmsdk_no_core_.rlim_cur = 0;                                 \
-    setrlimit(RLIMIT_CORE, &vmsdk_no_core_);                     \
-    ASSERT_DEATH(statement, matcher);                             \
-    setrlimit(RLIMIT_CORE, &vmsdk_saved_core_limit_);            \
+#define VMSDK_ASSERT_DEATH(statement, matcher)              \
+  {                                                         \
+    struct rlimit vmsdk_saved_core_limit_;                  \
+    getrlimit(RLIMIT_CORE, &vmsdk_saved_core_limit_);       \
+    struct rlimit vmsdk_no_core_ = vmsdk_saved_core_limit_; \
+    vmsdk_no_core_.rlim_cur = 0;                            \
+    setrlimit(RLIMIT_CORE, &vmsdk_no_core_);                \
+    ASSERT_DEATH(statement, matcher);                       \
+    setrlimit(RLIMIT_CORE, &vmsdk_saved_core_limit_);       \
   }
 
 #define VMSDK_EXPECT_OK(status) EXPECT_TRUE((status).ok())
