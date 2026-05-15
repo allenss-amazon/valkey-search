@@ -8,15 +8,20 @@
 
 #include <absl/container/flat_hash_map.h>
 
+#include <optional>
 #include <type_traits>
 #include <vector>
 
 #include "absl/log/check.h"
 #include "absl/status/status.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/str_format.h"
+#include "absl/strings/string_view.h"
 #include "absl/synchronization/mutex.h"
 #include "gtest/gtest_prod.h"
 #include "managed_pointers.h"
 #include "vmsdk/src/log.h"
+#include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
 namespace vmsdk {
@@ -209,7 +214,7 @@ class ConfigBase : public Registerable {
     }
   }
 
-  absl::Status Validate(T val) const {
+  virtual absl::Status Validate(T val) const {
     if (IsDeveloperConfig() && !IsDebugModeEnabled()) {
       return absl::PermissionDeniedError(
           absl::StrFormat("Modification of '%s' requires '%s' to be enabled.",
@@ -365,6 +370,117 @@ class String : public ConfigBase<std::string> {
   FRIEND_TEST(Builder, ConfigBuilder);
 };
 
+/// Specialization point that lets `TypedConfig<T>` convert between `T` and
+/// its on-disk string form. To add support for a new `T`, provide a
+/// specialization with these two static methods:
+///   static absl::StatusOr<T> Parse(absl::string_view);
+///   static std::string Format(const T&);
+template <typename T>
+struct ConfigTraits;
+
+template <>
+struct ConfigTraits<double> {
+  static absl::StatusOr<double> Parse(absl::string_view text);
+  static std::string Format(double value);
+};
+
+template <>
+struct ConfigTraits<vmsdk::ValkeyVersion> {
+  static absl::StatusOr<vmsdk::ValkeyVersion> Parse(absl::string_view text);
+  static std::string Format(const vmsdk::ValkeyVersion& value);
+};
+
+/// Configuration entry whose native type is `T`, stored under the hood as a
+/// Valkey string config. Conversion is driven by `ConfigTraits<T>`. Storage is
+/// unguarded: configs are read frequently but only written via CONFIG SET,
+/// and reads of `T` and `std::string` are tolerated to be non-atomic here.
+template <typename T>
+class TypedConfig : public ConfigBase<T> {
+ public:
+  ~TypedConfig() override = default;
+  absl::Status FromString(std::string_view value) override {
+    auto parsed = ConfigTraits<T>::Parse(value);
+    if (!parsed.ok()) {
+      return parsed.status();
+    }
+    this->SetValueOrLog(*parsed, WARNING);
+    return absl::OkStatus();
+  }
+
+  std::optional<T> GetMinValueOpt() const { return min_value_; }
+  std::optional<T> GetMaxValueOpt() const { return max_value_; }
+
+ protected:
+  TypedConfig(std::string_view name, T default_value)
+      : ConfigBase<T>(name),
+        default_value_(default_value),
+        current_value_(default_value),
+        cached_string_(ConfigTraits<T>::Format(default_value)) {}
+
+  TypedConfig(std::string_view name, T default_value, T min_value, T max_value)
+      : ConfigBase<T>(name),
+        default_value_(default_value),
+        current_value_(default_value),
+        cached_string_(ConfigTraits<T>::Format(default_value)),
+        min_value_(min_value),
+        max_value_(max_value) {}
+
+  T GetValueImpl() const override { return current_value_; }
+  T GetDefaultValueImpl() const override { return default_value_; }
+  void SetValueImpl(T value) override {
+    current_value_ = value;
+    cached_string_ = ConfigTraits<T>::Format(value);
+  }
+
+  absl::Status Register(ValkeyModuleCtx* ctx) override;
+
+  // Layer the optional [min, max] check on top of the base validator. Same
+  // error shape (`absl::OutOfRangeError`) regardless of which subclass
+  // declared the bounds.
+  absl::Status Validate(T value) const override {
+    if (auto status = ConfigBase<T>::Validate(value); !status.ok()) {
+      return status;
+    }
+    if ((min_value_ && value < *min_value_) ||
+        (max_value_ && value > *max_value_)) {
+      return absl::OutOfRangeError(absl::StrFormat(
+          "%s must be between %s and %s", this->GetName(),
+          ConfigTraits<T>::Format(*min_value_),
+          ConfigTraits<T>::Format(*max_value_)));
+    }
+    return absl::OkStatus();
+  }
+
+  T default_value_;
+  T current_value_;
+  std::string cached_string_;
+  std::optional<T> min_value_;
+  std::optional<T> max_value_;
+};
+
+class Double : public TypedConfig<double> {
+ public:
+  Double(std::string_view name, double default_value, double min_value,
+         double max_value)
+      : TypedConfig<double>(name, default_value, min_value, max_value) {}
+  ~Double() override = default;
+
+  double GetMinValue() const { return *min_value_; }
+  double GetMaxValue() const { return *max_value_; }
+};
+
+class Version : public TypedConfig<vmsdk::ValkeyVersion> {
+ public:
+  Version(std::string_view name, vmsdk::ValkeyVersion default_value,
+          vmsdk::ValkeyVersion min_value, vmsdk::ValkeyVersion max_value)
+      : TypedConfig<vmsdk::ValkeyVersion>(name, default_value, min_value,
+                                          max_value) {}
+  ~Version() override = default;
+
+  vmsdk::ValkeyVersion GetMinValue() const { return *min_value_; }
+  vmsdk::ValkeyVersion GetMaxValue() const { return *max_value_; }
+};
+
 template <typename ValkeyT>
 class ConfigBuilder {
  public:
@@ -433,11 +549,15 @@ class ConfigBuilder {
 /// `bool` -> Boolean configuration.
 /// `long long` -> Number configuration.
 /// `int` -> Enum configuration.
+/// `double` -> Double configuration (stored as string under the hood).
+/// `vmsdk::ValkeyVersion` -> Version configuration (stored as string).
 template <typename ValkeyT, typename... Args>
   requires(std::is_same<ValkeyT, long long>() == true ||
            std::is_same<ValkeyT, std::string>() == true ||
            std::is_same<ValkeyT, int>() == true ||
-           std::is_same<ValkeyT, bool>() == true)
+           std::is_same<ValkeyT, bool>() == true ||
+           std::is_same<ValkeyT, double>() == true ||
+           std::is_same<ValkeyT, vmsdk::ValkeyVersion>() == true)
 ConfigBuilder<ValkeyT> Builder(Args &&...args) {
   if constexpr (std::is_same<ValkeyT, long long>()) {
     // Number
@@ -451,6 +571,13 @@ ConfigBuilder<ValkeyT> Builder(Args &&...args) {
   } else if constexpr (std::is_same<ValkeyT, std::string>()) {
     // String
     return ConfigBuilder<std::string>(new String(std::forward<Args>(args)...));
+  } else if constexpr (std::is_same<ValkeyT, double>()) {
+    // Double
+    return ConfigBuilder<double>(new Double(std::forward<Args>(args)...));
+  } else if constexpr (std::is_same<ValkeyT, vmsdk::ValkeyVersion>()) {
+    // Version
+    return ConfigBuilder<vmsdk::ValkeyVersion>(
+        new Version(std::forward<Args>(args)...));
   } else {
     static_assert(!std::is_same_v<ValkeyT, ValkeyT>, "Unreachable");
   }
@@ -478,6 +605,18 @@ ConfigBuilder<bool> BooleanBuilder(Args &&...args) {
 template <typename... Args>
 ConfigBuilder<std::string> StringBuilder(Args &&...args) {
   return Builder<std::string>(std::forward<Args>(args)...);
+}
+
+/// Wrapper for building Double
+template <typename... Args>
+ConfigBuilder<double> DoubleBuilder(Args &&...args) {
+  return Builder<double>(std::forward<Args>(args)...);
+}
+
+/// Wrapper for building Version
+template <typename... Args>
+ConfigBuilder<vmsdk::ValkeyVersion> VersionBuilder(Args &&...args) {
+  return Builder<vmsdk::ValkeyVersion>(std::forward<Args>(args)...);
 }
 
 #define CHECK_RANGE(MIN, MAX, CONFIG_NAME)                         \
