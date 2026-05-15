@@ -59,8 +59,6 @@ static int OnSetConfig(const char *config_name, T value, void *priv_data,
     }
     return VALKEYMODULE_ERR;
   }
-
-  entry->NotifyChanged();
   return VALKEYMODULE_OK;
 }
 
