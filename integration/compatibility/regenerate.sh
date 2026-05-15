@@ -10,7 +10,8 @@
 #
 # After it finishes, git add and commit the updated *.pickle.gz files.
 
-ROOT_DIR=$(readlink -f "$(dirname "$0")/../..")
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 COMPAT_DIR=${ROOT_DIR}/integration/compatibility
 
 if ! command -v docker >/dev/null 2>&1; then
