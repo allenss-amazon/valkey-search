@@ -381,9 +381,8 @@ TEST_F(ConfigTest, ValkeyVersionFromString) {
 TEST_F(ConfigTest, CheckDouble) {
   size_t modify_calls = 0;
   auto cfg = config::DoubleBuilder("my-double", 1.5, 0.0, 10.0)
-                 .WithModifyCallback([&]([[maybe_unused]] double v) {
-                   ++modify_calls;
-                 })
+                 .WithModifyCallback(
+                     [&]([[maybe_unused]] double v) { ++modify_calls; })
                  .Build();
 
   EXPECT_DOUBLE_EQ(cfg->GetValue(), 1.5);
@@ -415,11 +414,9 @@ TEST_F(ConfigTest, CheckDouble) {
 TEST_F(ConfigTest, CheckVersion) {
   size_t modify_calls = 0;
   vmsdk::ValkeyVersion last_seen{0, 0, 0};
-  auto cfg = config::VersionBuilder(
-                 "my-version",
-                 vmsdk::ValkeyVersion(1, 2, 0),
-                 vmsdk::ValkeyVersion(1, 0, 0),
-                 vmsdk::ValkeyVersion(2, 0, 0))
+  auto cfg = config::VersionBuilder("my-version", vmsdk::ValkeyVersion(1, 2, 0),
+                                    vmsdk::ValkeyVersion(1, 0, 0),
+                                    vmsdk::ValkeyVersion(2, 0, 0))
                  .WithModifyCallback([&](vmsdk::ValkeyVersion v) {
                    ++modify_calls;
                    last_seen = v;

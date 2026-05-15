@@ -139,7 +139,7 @@ absl::Status ModuleConfigManager::ParseAndLoadArgv(ValkeyModuleCtx *ctx,
                                                    ValkeyModuleString **argv,
                                                    int argc) {
   // reset the debug mode to "false".
-  debug_mode->SetValueOrLog(false, LogLevel::kWarning);
+  CHECK(debug_mode->SetValueOrLog(false, LogLevel::kWarning).ok());
   vmsdk::ArgsIterator iter{argv, argc};
   while (iter.HasNext()) {
     VMSDK_ASSIGN_OR_RETURN(auto key, iter.Get());
@@ -223,8 +223,7 @@ absl::Status Number::FromString(std::string_view value) {
     return absl::InvalidArgumentError(
         absl::StrFormat("Failed to convert '%s' into a number", value));
   }
-  SetValueOrLog(default_value_, WARNING);
-  return absl::OkStatus();
+  return SetValueOrLog(default_value_, WARNING);
 }
 
 Enum::Enum(std::string_view name, int default_value,
@@ -282,8 +281,7 @@ absl::Status Enum::FromString(std::string_view value) {
   default_value_ = values_[enumerator_index];
 
   // update the current value, skip the validation as we just did that
-  SetValueOrLog(default_value_, WARNING);
-  return absl::OkStatus();
+  return SetValueOrLog(default_value_, WARNING);
 }
 
 Boolean::Boolean(std::string_view name, bool default_value)
@@ -312,16 +310,15 @@ absl::Status Boolean::FromString(std::string_view value) {
   if (value_lowercase == "yes" || value_lowercase == "on" ||
       value_lowercase == "true") {
     default_value_ = true;
-    SetValueOrLog(default_value_, WARNING);
+    return SetValueOrLog(default_value_, WARNING);
   } else if (value_lowercase == "no" || value_lowercase == "off" ||
              value_lowercase == "false") {
     default_value_ = false;
-    SetValueOrLog(default_value_, WARNING);
+    return SetValueOrLog(default_value_, WARNING);
   } else {
     return absl::InvalidArgumentError(
         absl::StrFormat("Invalid boolean value: '%s'", value));
   }
-  return absl::OkStatus();
 }
 
 String::String(std::string_view name, std::string_view default_value)
@@ -348,8 +345,7 @@ absl::Status String::FromString(std::string_view value) {
     return absl::InvalidArgumentError("Invalid string value: null");
   }
   default_ = value.data();
-  SetValueOrLog(default_, WARNING);
-  return absl::OkStatus();
+  return SetValueOrLog(default_, WARNING);
 }
 /// Get method to fetch the `hide_user_data_config`
 vmsdk::config::Boolean &GetHideUserDataFromLog() {
@@ -369,8 +365,8 @@ std::string ConfigTraits<double>::Format(double value) {
   return absl::StrFormat("%g", value);
 }
 
-absl::StatusOr<vmsdk::ValkeyVersion>
-ConfigTraits<vmsdk::ValkeyVersion>::Parse(absl::string_view text) {
+absl::StatusOr<vmsdk::ValkeyVersion> ConfigTraits<vmsdk::ValkeyVersion>::Parse(
+    absl::string_view text) {
   return vmsdk::ValkeyVersion::FromString(text);
 }
 
@@ -417,14 +413,10 @@ int OnSetTypedConfig(const char *config_name, ValkeyModuleString *value,
 
 template <typename T>
 absl::Status TypedConfig<T>::Register(ValkeyModuleCtx *ctx) {
-  if (ValkeyModule_RegisterStringConfig(ctx,
-                                        this->name_.data(),
-                                        cached_string_.c_str(),
-                                        this->flags_,
-                                        OnGetTypedConfig<T>,
-                                        OnSetTypedConfig<T>,
-                                        nullptr,
-                                        this) != VALKEYMODULE_OK) {
+  if (ValkeyModule_RegisterStringConfig(
+          ctx, this->name_.data(), cached_string_.c_str(), this->flags_,
+          OnGetTypedConfig<T>, OnSetTypedConfig<T>, nullptr,
+          this) != VALKEYMODULE_OK) {
     return absl::InternalError(absl::StrCat(
         "Failed to register typed configuration entry: ", this->name_));
   }

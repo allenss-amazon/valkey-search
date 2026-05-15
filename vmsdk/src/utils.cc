@@ -398,8 +398,7 @@ absl::StatusOr<ValkeyVersion> ValkeyVersion::FromString(
   const unsigned limits[3] = {0xFFFF, 0xFF, 0xFF};
   const char *labels[3] = {"major", "minor", "patch"};
   for (int i = 0; i < 3; ++i) {
-    if (parts[i].empty() ||
-        !absl::SimpleAtoi(parts[i], &components[i])) {
+    if (parts[i].empty() || !absl::SimpleAtoi(parts[i], &components[i])) {
       return absl::InvalidArgumentError(absl::StrCat(
           "Invalid version '", text, "': ", labels[i], " is not a number"));
     }

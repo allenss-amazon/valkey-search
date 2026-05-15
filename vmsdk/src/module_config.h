@@ -189,19 +189,21 @@ class ConfigBase : public Registerable {
     return absl::OkStatus();
   }
 
-  /// Set the value to this configuration item, or log a warning message.
-  void SetValueOrLog(T value, LogLevel log_level) {
+  /// Set the value to this configuration item, or log a warning message on
+  /// failure
+  absl::Status SetValueOrLog(T value, LogLevel log_level) {
     auto res = Validate(value);
     if (!res.ok()) {
       VMSDK_LOG(log_level, nullptr)
           << "Failed to update configuration entry: " << GetName() << ". "
           << res.message();
-      return;
+      return res;
     }
 
     was_set_ = true;
     SetValueImpl(value);
     NotifyChanged();
+    return absl::OkStatus();
   }
 
   T GetValue() const { return GetValueImpl(); }
@@ -387,7 +389,7 @@ struct ConfigTraits<double> {
 template <>
 struct ConfigTraits<vmsdk::ValkeyVersion> {
   static absl::StatusOr<vmsdk::ValkeyVersion> Parse(absl::string_view text);
-  static std::string Format(const vmsdk::ValkeyVersion& value);
+  static std::string Format(const vmsdk::ValkeyVersion &value);
 };
 
 /// Configuration entry whose native type is `T`, stored under the hood as a
@@ -403,8 +405,7 @@ class TypedConfig : public ConfigBase<T> {
     if (!parsed.ok()) {
       return parsed.status();
     }
-    this->SetValueOrLog(*parsed, WARNING);
-    return absl::OkStatus();
+    return this->SetValueOrLog(*parsed, WARNING);
   }
 
   std::optional<T> GetMinValueOpt() const { return min_value_; }
@@ -432,7 +433,7 @@ class TypedConfig : public ConfigBase<T> {
     cached_string_ = ConfigTraits<T>::Format(value);
   }
 
-  absl::Status Register(ValkeyModuleCtx* ctx) override;
+  absl::Status Register(ValkeyModuleCtx *ctx) override;
 
   // Layer the optional [min, max] check on top of the base validator. Same
   // error shape (`absl::OutOfRangeError`) regardless of which subclass
@@ -443,10 +444,10 @@ class TypedConfig : public ConfigBase<T> {
     }
     if ((min_value_ && value < *min_value_) ||
         (max_value_ && value > *max_value_)) {
-      return absl::OutOfRangeError(absl::StrFormat(
-          "%s must be between %s and %s", this->GetName(),
-          ConfigTraits<T>::Format(*min_value_),
-          ConfigTraits<T>::Format(*max_value_)));
+      return absl::OutOfRangeError(
+          absl::StrFormat("%s must be between %s and %s", this->GetName(),
+                          ConfigTraits<T>::Format(*min_value_),
+                          ConfigTraits<T>::Format(*max_value_)));
     }
     return absl::OkStatus();
   }

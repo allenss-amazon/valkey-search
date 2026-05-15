@@ -18,6 +18,8 @@ The following are explicitly **not** goals of Valkey Search compatibility with R
 
 **Error message text parity.** The exact wording of error strings returned to clients is not guaranteed to match Redisearch. The _semantic_ error conditions — that is, which operations fail and under what circumstances — are expected to align where command and query compatibility applies, but the human-readable text of error responses may differ.
 
+**Security Architecture** Valkey Search security architecture is somewhat more restrictive than Redisearch. Valkey Search enforces a user's ACL keyspace restrictions on query operations (FT.SEARCH, FT.AGGREGATE), while Redisearch does not.
+
 ## Expected Compatibility
 
 This section describes the areas where Valkey Search intends to behave the same as Redisearch from an application's point of view. **Observable differences in these areas are considered bugs.** If an application written against Redisearch produces different results, fails where it previously succeeded, or succeeds where it previously failed in any of the following dimensions, that is a defect in Valkey Search and should be reported as such.
@@ -142,14 +144,18 @@ Audit the application's queries and identify any that (a) have no defined sort o
 
 Within each document returned by `FT.SEARCH` or `FT.AGGREGATE`, the order in which the document's attributes (attribute name / value pairs) appear inside the reply is not guaranteed to match between Redisearch and Valkey Search (see _Query language and semantics_ above). Standard Redisearch client libraries parse these replies into name-keyed maps or structured records and are not affected. Custom or hand-rolled result-parsing code, however, may be reading fields by position — for example, "the value at index 3 is the `price` field" — and will break when the attributes come back in a different sequence. Review any such code and change it to look up attributes by name rather than by position.
 
+### 9. Review ACL keyspace restrictions
+
+If ACL keyspace restrictions are used, these should be reviewed as Valkey Search is more restrictive in some cases.
+
 ## Compatibility Defects
 
 Valkey Search follows the rules of [SemVer](https://semver.org) which governs the range of permitted changes in behavior from release to release. These rules would normally prohibit the ability to correct compatibility defects (bugs) in a minor or patch release. An exception to the SemVer rules is made for defects which are judged to be unusable, in other words if the defective behavior renders the feature unusable, then the rules of SemVer do no apply as there isn't any valid user base to protect.
 
-Valkey Search provides an opt-in mechanism to enable the correction of compatibility bugs in minor and/or patch releases with out violating the SemVer rules.
+Valkey Search provides an opt-in mechanism to enable the correction of compatibility bugs in minor and/or patch releases without violating the SemVer rules.
 A fix for a compatibility bug released in a minor or patch release selectively provides both the old (incompatible) behavior as well as the new (compatible) behavior. The selection is controlled by the configurable `search.emulate-release` which is set to a specific release identifier and governs the behavior. For example, if a compatibility bug is fixed in release 1.2.2 then setting `search.emulate-release` to `1.2.1` or smaller would enable the old behavior, but setting it to `1.2.2` or larger would enable the compatible behavior. The default value for `search.emulate-release` is set to the current major release (X.0.0 currently) which honors SemVer rules if there is no opt-in.
 
-The old (non-compatible) behavior will be preserved for at least one additional major releases. If a bug was fixed in 1.x.x, then the 2.y.y will support emulating the 1.x.x. release. However support in the 3.z.z release or later releases is not ensured.
+The old (non-compatible) behavior will be preserved for at least one additional major release. If a bug was fixed in 1.x.x, then the 2.y.y will support emulating the 1.x.x. release. However support in the 3.z.z release or later releases is not ensured.
 
 It may be judged that a compatibility defect cannot reasonably be fixed while preserving the old behavior. In this case, the fix cannot be made until the next major release and will ignore the `search.emulate-release` mechanism.
 

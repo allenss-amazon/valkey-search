@@ -715,11 +715,9 @@ constexpr absl::string_view kEmulateReleaseConfig{"emulate-release"};
 constexpr vmsdk::ValkeyVersion kEmulateReleaseMin{1, 0, 0};
 
 static auto emulate_release_config =
-    config::VersionBuilder(
-        kEmulateReleaseConfig,
-        vmsdk::ValkeyVersion(kModuleVersion.Major(), 0, 0),
-        kEmulateReleaseMin,
-        kModuleVersion)
+    config::VersionBuilder(kEmulateReleaseConfig,
+                           vmsdk::ValkeyVersion(kModuleVersion.Major(), 0, 0),
+                           kEmulateReleaseMin, kModuleVersion)
         .Build();
 
 config::Version& GetEmulateRelease() {
