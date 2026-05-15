@@ -22,7 +22,7 @@ The following are explicitly **not** goals of Valkey Search compatibility with R
 
 This section describes the areas where Valkey Search intends to behave the same as Redisearch from an application's point of view. **Observable differences in these areas are considered bugs.** If an application written against Redisearch produces different results, fails where it previously succeeded, or succeeds where it previously failed in any of the following dimensions, that is a defect in Valkey Search and should be reported as such.
 
-The contract below applies only to features that Valkey Search actually implements. Valkey Search does not include every feature of Redisearch; its supported feature set is a subset. An application that attempts to use a Redisearch feature Valkey Search does not support will receive an error — typically indicating that the command, option, field type, or query construct is not recognized or not implemented. That error is the intended behavior and is **not** a compatibility bug. The authoritative source for which features are supported is the Valkey Search documentation and the release notes for the specific release of Valkey Search being deployed; those should be consulted to determine the supported surface.
+The contract applies only to features that Valkey Search actually implements. Valkey Search does not include every feature of Redisearch; its supported feature set is a subset. An application that attempts to use a Redisearch feature Valkey Search does not support will receive an error — typically indicating that the command, option, field type, or query construct is not recognized or not implemented. That error is the intended behavior and is **not** a compatibility bug. The authoritative source for which features are supported is the Valkey Search documentation and the release notes for the specific release of Valkey Search being deployed; those should be consulted to determine the supported surface.
 
 ### Command and argument syntax
 
@@ -76,7 +76,7 @@ This section describes areas where Valkey Search intentionally diverges from Red
 
 **Why.** Folding cluster coordination into the module itself removes a separate deployable component and the operational complexity that comes with it, and produces a deployment model that aligns with how Valkey's own cluster mode is operated. Making cluster-wide consistency the default behavior — rather than something the caller has to opt into with special options — means applications do not need to know whether they are talking to a clustered deployment or a single-node deployment to get correct results.
 
-**Migration impact.** Applications no longer need to invoke a separate RSCoordinator component or add cluster-specific options to their commands; any such options should be removed as part of migration. Operational tooling that deployed, monitored, or scaled the RScoordinator component will no longer apply. Callers should be prepared for the possibility that a cluster-wide operation may return a timeout error when cluster-wide consistency cannot be established within the operation's timeout, and should handle that case — for example by retrying at the application level or surfacing the failure to the user — rather than treating success as guaranteed.
+**Migration impact.** Applications no longer need to invoke a separate RSCoordinator component or add cluster-specific options to their commands; any such options should be removed as part of migration. Operational tooling that deployed, monitored, or scaled the RSCoordinator component will no longer apply. Callers should be prepared for the possibility that a cluster-wide operation may return a timeout error when cluster-wide consistency cannot be established within the operation's timeout, and should handle that case — for example by retrying at the application level or surfacing the failure to the user — rather than treating success as guaranteed.
 
 ### Persistence and on-disk index format
 
@@ -144,26 +144,19 @@ Within each document returned by `FT.SEARCH` or `FT.AGGREGATE`, the order in whi
 
 ## Compatibility Defects
 
-Valkey Search follows the rules of [SemVer](http://semver.org) which governs the ability to correct compatibility defects (bugs). The Valkey Search project will apply the following rules for addressing compatibility bugs:
+Valkey Search follows the rules of [SemVer](http://semver.org) which governs the range of permitted changes in behavior from release to release. These rules would normally prohibit the ability to correct compatibility defects (bugs) in a minor or patch release. An exception to the SemVer rules is made for defects which are judged to be unusable, in other words if the defective behavior renders the feature unusable, then the rules of SemVer do no apply as there isn't any valid user base to protect.
 
-1. Previously released functionality that is determined to be a compatibility defect will not be removed. The corrected behavior will be implemented side-by-side and a "feature flag" will be able to select either the new or old behavior. The feature flag will be controlled through the standard configuration machinery.
+Valkey Search provides an opt-in mechanism to enable the correction of compatibility bugs in minor and/or patch releases with out violating the SemVer rules.
+A fix for a compatibility bug released in a minor or patch release selectively provides both the old (incompatible) behavior as well as the new (compatible) behavior. The selection is controlled by the configurable `search.emulate-release` which is set to a specific release identifier and governs the behavior. For example, if a compatibility bug is fixed in release 1.2.2 then setting `search.emulate-release` to `1.2.1` or smaller would enable the old behavior, but setting it to `1.2.2` or larger would enable the compatible behavior. The default value for `search.emulate-release` is set to the current major release (X.0.0 currently) which honors SemVer rules if there is no opt-in.
 
-2. Following the SemVer rules, in a minor or patch release, the default value of any new feature flag will be to retain the old functionality. Users desiring the new behavior will have to reconfigure the feature flag accordingly.
+The old (non-compatible) behavior will be preserved for at least one additional major releases. If a bug was fixed in 1.x.x, then the 2.y.y will support emulating the 1.x.x. release. However support in the 3.z.z release or later releases is not ensured.
 
-3. In a major version, all compatibility feature flags will have their default values switched to the new (compatible) behavior. The old behavior is retained, but is deprecated. Users desiring the old behavior can reconfigure accordingly.
+It may be judged that a compatibility defect cannot reasonably be fixed while preserving the old behavior. In this case, the fix cannot be made until the next major release and will ignore the `search.emulate-release` mechanism.
 
-4. The settings of the compatibility flags must be identical across a cluster (including CMD's replicas) to ensure reliable operation. Problems associated with split configured clusters are out of scope.
+### Known Compatibility Defect Corrections
 
-5. There is no requirement that there be a 1:1 mapping between individual feature flags and specific bugs. It's possible that multiple compatibility bugs may be controlled by the same feature flag, provided that the fixes are all in the same release. This ensures it is possible to configure newer releases to match the behavior of any specific previous release.
+A list of the compatibility issues that have been fixed.
 
-6. Feature flags endure for a minimum of two major releases. For example, suppose a defect is fixed in release 2.0.5. The associated feature flag will be available but deprecated in the 3.x and 4.x releases. The deprecated behavior could be removed in the 5.x release.
-
-The previous rules will not disallow the single feature flag mechanism. In this mechanism, there is a single configurable that is set to a specific release value and this controls the behavior. Following the rules above. The default value of the single configurable will be the current major release with a minor release and patch number of 0, i.e., N.0.0.
-
-### Known Compatibility Defects
-
-This section will enumerate known defects in surfaces that are intended to be compatible with Redisearch under the Expected Compatibility contract above. Items listed here are bugs, not design choices, and are tracked for resolution rather than documented as permanent differences.
-
-| Flag Name          | Introduced Release | Description |
-| ------------------ | ------------------ | ----------- |
-| under construction | n/a                |             |
+| Release            | Description |
+| ------------------ | ----------- |
+| under construction | n/a         |
