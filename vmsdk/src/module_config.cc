@@ -378,8 +378,7 @@ template <typename T>
 ValkeyModuleString *OnGetTypedConfig(const char *config_name, void *priv_data) {
   auto entry = static_cast<TypedConfig<T> *>(priv_data);
   CHECK(entry) << "null private data";
-  std::string s = ConfigTraits<T>::Format(entry->GetValue());
-  return ValkeyModule_CreateStringPrintf(nullptr, "%s", s.c_str());
+  return entry->GetCachedValkeyString();
 }
 
 template <typename T>
@@ -411,8 +410,9 @@ int OnSetTypedConfig(const char *config_name, ValkeyModuleString *value,
 
 template <typename T>
 absl::Status TypedConfig<T>::Register(ValkeyModuleCtx *ctx) {
+  std::string default_text = ConfigTraits<T>::Format(this->default_value_);
   if (ValkeyModule_RegisterStringConfig(
-          ctx, this->name_.data(), cached_string_.c_str(), this->flags_,
+          ctx, this->name_.data(), default_text.c_str(), this->flags_,
           OnGetTypedConfig<T>, OnSetTypedConfig<T>, nullptr,
           this) != VALKEYMODULE_OK) {
     return absl::InternalError(absl::StrCat(

@@ -155,7 +155,7 @@ Valkey Search follows the rules of [SemVer](https://semver.org) which governs th
 Valkey Search provides an opt-in mechanism to enable the correction of compatibility bugs in minor and/or patch releases without violating the SemVer rules.
 A fix for a compatibility bug released in a minor or patch release selectively provides both the old (incompatible) behavior as well as the new (compatible) behavior. The selection is controlled by the configurable `search.emulate-release` which is set to a specific release identifier and governs the behavior. For example, if a compatibility bug is fixed in release 1.2.2 then setting `search.emulate-release` to `1.2.1` or smaller would enable the old behavior, but setting it to `1.2.2` or larger would enable the compatible behavior. The default value for `search.emulate-release` is set to the current major release (X.0.0 currently) which honors SemVer rules if there is no opt-in.
 
-The old (non-compatible) behavior will be preserved for at least one additional major release. If a bug was fixed in 1.x.x, then the 2.y.y will support emulating the 1.x.x. release. However support in the 3.z.z release or later releases is not ensured.
+The old (non-compatible) behavior will be preserved for at least one additional major release. If a bug was fixed in 1.x.x, then the 2.y.y will support emulating the 1.x.x release. However support in the 3.z.z release or later releases is not ensured.
 
 It may be judged that a compatibility defect cannot reasonably be fixed while preserving the old behavior. In this case, the fix cannot be made until the next major release and will ignore the `search.emulate-release` mechanism.
 

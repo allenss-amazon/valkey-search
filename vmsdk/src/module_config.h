@@ -21,6 +21,7 @@
 #include "gtest/gtest_prod.h"
 #include "managed_pointers.h"
 #include "vmsdk/src/log.h"
+#include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/utils.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
@@ -179,10 +180,7 @@ class ConfigBase : public Registerable {
   }
 
   absl::Status SetValue(T value) {
-    auto res = Validate(value);
-    if (!res.ok()) {
-      return res;
-    }
+    VMSDK_RETURN_IF_ERROR(Validate(value));
     was_set_ = true;
     SetValueImpl(value);
     NotifyChanged();
@@ -395,34 +393,40 @@ struct ConfigTraits<vmsdk::ValkeyVersion> {
 /// Configuration entry whose native type is `T`, stored under the hood as a
 /// Valkey string config. Conversion is driven by `ConfigTraits<T>`. Storage is
 /// unguarded: configs are read frequently but only written via CONFIG SET,
-/// and reads of `T` and `std::string` are tolerated to be non-atomic here.
+/// and reads of `T` are tolerated to be non-atomic here.
 template <typename T>
 class TypedConfig : public ConfigBase<T> {
  public:
   ~TypedConfig() override = default;
   absl::Status FromString(std::string_view value) override {
-    auto parsed = ConfigTraits<T>::Parse(value);
-    if (!parsed.ok()) {
-      return parsed.status();
-    }
-    return this->SetValueOrLog(*parsed, WARNING);
+    VMSDK_ASSIGN_OR_RETURN(default_value_, ConfigTraits<T>::Parse(value));
+    return this->SetValueOrLog(default_value_, WARNING);
   }
 
   std::optional<T> GetMinValueOpt() const { return min_value_; }
   std::optional<T> GetMaxValueOpt() const { return max_value_; }
 
+  // The Valkey config-get API treats the returned pointer as borrowed and never
+  // frees it, so we hold a cached UniqueValkeyString here. Rebuilt on demand
+  // after SetValueImpl clears it.
+  ValkeyModuleString *GetCachedValkeyString() const {
+    if (!cached_string_valkey_) {
+      cached_string_valkey_ =
+          vmsdk::MakeUniqueValkeyString(ConfigTraits<T>::Format(current_value_));
+    }
+    return cached_string_valkey_.get();
+  }
+
  protected:
   TypedConfig(std::string_view name, T default_value)
       : ConfigBase<T>(name),
         default_value_(default_value),
-        current_value_(default_value),
-        cached_string_(ConfigTraits<T>::Format(default_value)) {}
+        current_value_(default_value) {}
 
   TypedConfig(std::string_view name, T default_value, T min_value, T max_value)
       : ConfigBase<T>(name),
         default_value_(default_value),
         current_value_(default_value),
-        cached_string_(ConfigTraits<T>::Format(default_value)),
         min_value_(min_value),
         max_value_(max_value) {}
 
@@ -430,7 +434,7 @@ class TypedConfig : public ConfigBase<T> {
   T GetDefaultValueImpl() const override { return default_value_; }
   void SetValueImpl(T value) override {
     current_value_ = value;
-    cached_string_ = ConfigTraits<T>::Format(value);
+    cached_string_valkey_.reset();
   }
 
   absl::Status Register(ValkeyModuleCtx *ctx) override;
@@ -439,9 +443,7 @@ class TypedConfig : public ConfigBase<T> {
   // error shape (`absl::OutOfRangeError`) regardless of which subclass
   // declared the bounds.
   absl::Status Validate(T value) const override {
-    if (auto status = ConfigBase<T>::Validate(value); !status.ok()) {
-      return status;
-    }
+    VMSDK_RETURN_IF_ERROR(ConfigBase<T>::Validate(value));
     if ((min_value_ && value < *min_value_) ||
         (max_value_ && value > *max_value_)) {
       return absl::OutOfRangeError(
@@ -454,7 +456,7 @@ class TypedConfig : public ConfigBase<T> {
 
   T default_value_;
   T current_value_;
-  std::string cached_string_;
+  mutable UniqueValkeyString cached_string_valkey_;
   std::optional<T> min_value_;
   std::optional<T> max_value_;
 };
