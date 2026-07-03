@@ -22,6 +22,7 @@
 #include "absl/synchronization/mutex.h"
 #include "src/attribute_data_type.h"
 #include "src/indexes/vector_base.h"
+#include "src/indexes/vector_type.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/cancel.h"
 #include "src/utils/string_interning.h"
@@ -32,7 +33,7 @@
 namespace valkey_search::indexes {
 
 template <typename T>
-class VectorFlat : public VectorBase {
+class VectorFlat : public VectorType<T> {
  public:
   static absl::StatusOr<std::shared_ptr<VectorFlat<T>>> Create(
       const data_model::VectorIndex& vector_index_proto,
@@ -45,12 +46,11 @@ class VectorFlat : public VectorBase {
       absl::string_view attribute_identifier,
       SupplementalContentChunkIter&& iter) ABSL_NO_THREAD_SAFETY_ANALYSIS;
   ~VectorFlat() override = default;
-  size_t GetDataTypeSize() const override { return sizeof(T); }
 
   const hnswlib::SpaceInterface<float>* GetSpace() const {
-    return space_.get();
+    return this->space_.get();
   }
-  int GetDimensions() const { return dimensions_; }
+  int GetDimensions() const { return this->dimensions_; }
   int GetBlockSize() const { return block_size_; }
   size_t GetCapacity() const override
       ABSL_SHARED_LOCKS_REQUIRED(resize_mutex_) {
@@ -97,7 +97,6 @@ class VectorFlat : public VectorBase {
              data_model::AttributeDataType attribute_data_type);
   std::unique_ptr<hnswlib::BruteforceSearch<T>> algo_
       ABSL_GUARDED_BY(resize_mutex_);
-  std::unique_ptr<hnswlib::SpaceInterface<T>> space_;
   uint32_t block_size_;
   mutable absl::Mutex resize_mutex_;
   mutable absl::Mutex tracked_vectors_mutex_;

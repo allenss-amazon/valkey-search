@@ -18,7 +18,6 @@
 #include <queue>
 #include <string>
 #include <string_view>
-#include <type_traits>
 #include <utility>
 
 #include "absl/log/check.h"
@@ -60,8 +59,7 @@ absl::StatusOr<std::shared_ptr<VectorFlat<T>>> VectorFlat<T>::Create(
                           vector_index_proto.distance_metric(),
                           vector_index_proto.flat_algorithm().block_size(),
                           attribute_identifier, attribute_data_type));
-    index->Init(vector_index_proto.dimension_count(),
-                vector_index_proto.distance_metric(), index->space_);
+    index->Init(vector_index_proto.distance_metric());
     index->algo_ = std::make_unique<hnswlib::BruteforceSearch<T>>(
         index->space_.get(), vector_index_proto.initial_cap());
     return index;
@@ -108,8 +106,7 @@ absl::StatusOr<std::shared_ptr<VectorFlat<T>>> VectorFlat<T>::LoadFromRDB(
         vector_index_proto.distance_metric(),
         vector_index_proto.flat_algorithm().block_size(), attribute_identifier,
         attribute_data_type->ToProto()));
-    index->Init(vector_index_proto.dimension_count(),
-                vector_index_proto.distance_metric(), index->space_);
+    index->Init(vector_index_proto.distance_metric());
     index->algo_ =
         std::make_unique<hnswlib::BruteforceSearch<T>>(index->space_.get());
     RDBChunkInputStream input(std::move(iter));
@@ -128,8 +125,8 @@ VectorFlat<T>::VectorFlat(
     int dimensions, valkey_search::data_model::DistanceMetric distance_metric,
     uint32_t block_size, absl::string_view attribute_identifier,
     data_model::AttributeDataType attribute_data_type)
-    : VectorBase(IndexerType::kFlat, dimensions, attribute_data_type,
-                 attribute_identifier),
+    : VectorType<T>(IndexerType::kFlat, dimensions, attribute_data_type,
+                    attribute_identifier),
       block_size_(block_size) {}
 
 template <typename T>
@@ -241,16 +238,16 @@ absl::StatusOr<std::vector<Neighbor>> VectorFlat<T>::Search(
       return absl::InternalError(e.what());
     }
   };
-  if (normalize_) {
-    auto norm_record = NormalizeEmbedding(query, GetDataTypeSize());
+  if (this->normalize_) {
+    auto norm_record = NormalizeEmbedding(query, this->GetDataTypeSize());
     VMSDK_ASSIGN_OR_RETURN(
         auto search_result,
         perform_search(absl::string_view((const char *)norm_record.data(),
                                          norm_record.size())));
-    return CreateReply(search_result);
+    return this->CreateReply(search_result);
   }
   VMSDK_ASSIGN_OR_RETURN(auto search_result, perform_search(query));
-  return CreateReply(search_result);
+  return this->CreateReply(search_result);
 }
 
 template <typename T>
@@ -273,14 +270,7 @@ VectorFlat<T>::ComputeDistanceFromRecordImpl(uint64_t internal_id,
 template <typename T>
 void VectorFlat<T>::ToProtoImpl(
     data_model::VectorIndex *vector_index_proto) const {
-  data_model::VectorDataType data_type;
-  if constexpr (std::is_same_v<T, float>) {
-    data_type = data_model::VectorDataType::VECTOR_DATA_TYPE_FLOAT32;
-  } else {
-    DCHECK(false) << "Unsupported type: " << typeid(T).name();
-    data_type = data_model::VectorDataType::VECTOR_DATA_TYPE_UNSPECIFIED;
-  }
-  vector_index_proto->set_vector_data_type(data_type);
+  this->SetProtoDataType(vector_index_proto);
 
   auto flat_algorithm_proto = std::make_unique<data_model::FlatAlgorithm>();
   flat_algorithm_proto->set_block_size(block_size_);
@@ -290,16 +280,7 @@ void VectorFlat<T>::ToProtoImpl(
 
 template <typename T>
 int VectorFlat<T>::RespondWithInfoImpl(ValkeyModuleCtx *ctx) const {
-  ValkeyModule_ReplyWithSimpleString(ctx, "data_type");
-  if constexpr (std::is_same_v<T, float>) {
-    ValkeyModule_ReplyWithSimpleString(
-        ctx,
-        LookupKeyByValue(*kVectorDataTypeByStr,
-                         data_model::VectorDataType::VECTOR_DATA_TYPE_FLOAT32)
-            .data());
-  } else {
-    ValkeyModule_ReplyWithSimpleString(ctx, "UNKNOWN");
-  }
+  this->EmitDataTypeInfo(ctx);
   ValkeyModule_ReplyWithSimpleString(ctx, "algorithm");
   ValkeyModule_ReplyWithArray(ctx, 4);
   ValkeyModule_ReplyWithSimpleString(ctx, "name");

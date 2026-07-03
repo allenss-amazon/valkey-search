@@ -19,7 +19,6 @@
 #include <optional>
 #include <queue>
 #include <string>
-#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -28,11 +27,8 @@
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
-#include "absl/strings/numbers.h"
 #include "absl/strings/str_cat.h"
-#include "absl/strings/str_split.h"
 #include "absl/strings/string_view.h"
-#include "absl/strings/strip.h"
 #include "absl/synchronization/mutex.h"
 #include "src/attribute_data_type.h"
 #include "src/index_schema.pb.h"
@@ -45,8 +41,6 @@
 #include "src/valkey_search_options.h"
 #include "src/vector_externalizer.h"
 #include "third_party/hnswlib/hnswlib.h"
-#include "third_party/hnswlib/space_ip.h"
-#include "third_party/hnswlib/space_l2.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/status/status_macros.h"
@@ -55,27 +49,6 @@
 
 namespace valkey_search {
 constexpr float kDefaultMagnitude = -1.0f;
-
-namespace {
-
-template <typename T>
-std::unique_ptr<hnswlib::SpaceInterface<T>> CreateSpace(
-    int dimensions, valkey_search::data_model::DistanceMetric distance_metric) {
-  if constexpr (std::is_same_v<T, float>) {
-    if (distance_metric ==
-            valkey_search::data_model::DistanceMetric::DISTANCE_METRIC_COSINE ||
-        distance_metric ==
-            valkey_search::data_model::DistanceMetric::DISTANCE_METRIC_IP) {
-      return std::make_unique<hnswlib::InnerProductSpace>(dimensions);
-    } else {
-      return std::make_unique<hnswlib::L2Space>(dimensions);
-    }
-  }
-  DCHECK(false) << "no matching spacer";
-  return std::make_unique<hnswlib::L2Space>(dimensions);
-}
-
-}  // namespace
 
 namespace indexes {
 bool PrefilterEvaluator::Evaluate(const query::Predicate &predicate,
@@ -135,18 +108,6 @@ std::vector<char> NormalizeEmbedding(absl::string_view record, size_t type_size,
     return ret;
   }
   CHECK(false) << "unsupported type size";
-}
-
-template <typename T>
-void VectorBase::Init(int dimensions,
-                      valkey_search::data_model::DistanceMetric distance_metric,
-                      std::unique_ptr<hnswlib::SpaceInterface<T>> &space) {
-  space = CreateSpace<T>(dimensions, distance_metric);
-  distance_metric_ = distance_metric;
-  if (distance_metric ==
-      valkey_search::data_model::DistanceMetric::DISTANCE_METRIC_COSINE) {
-    normalize_ = true;
-  }
 }
 
 InternedStringPtr VectorBase::InternVector(absl::string_view record,
@@ -525,27 +486,6 @@ bool VectorBase::AddPrefilteredKey(
   return false;
 }
 
-vmsdk::UniqueValkeyString VectorBase::NormalizeStringRecord(
-    vmsdk::UniqueValkeyString record) const {
-  CHECK_EQ(GetDataTypeSize(), sizeof(float));
-  auto record_str = vmsdk::ToStringView(record.get());
-  if (absl::ConsumePrefix(&record_str, "[")) {
-    absl::ConsumeSuffix(&record_str, "]");
-  }
-  std::vector<std::string> float_strings =
-      absl::StrSplit(record_str, ',', absl::SkipWhitespace());
-  std::string binary_string;
-  binary_string.reserve(float_strings.size() * sizeof(float));
-  for (const auto &float_str : float_strings) {
-    float value;
-    if (!absl::SimpleAtof(float_str, &value)) {
-      return nullptr;
-    }
-    binary_string += std::string((char *)&value, sizeof(float));
-  }
-  return vmsdk::MakeUniqueValkeyString(binary_string);
-}
-
 size_t VectorBase::GetTrackedKeyCount() const {
   absl::ReaderMutexLock lock(&key_to_metadata_mutex_);
   return key_by_internal_id_.size();
@@ -578,10 +518,6 @@ absl::Status VectorBase::ForEachUnTrackedKey(
     absl::AnyInvocable<absl::Status(const InternedStringPtr &)> fn) const {
   return absl::OkStatus();
 }
-
-template void VectorBase::Init<float>(
-    int dimensions, data_model::DistanceMetric distance_metric,
-    std::unique_ptr<hnswlib::SpaceInterface<float>> &space);
 
 template absl::StatusOr<std::vector<Neighbor>> VectorBase::CreateReply<float>(
     std::priority_queue<std::pair<float, hnswlib::labeltype>> &knn_res);
