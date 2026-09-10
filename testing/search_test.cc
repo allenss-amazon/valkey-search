@@ -1127,7 +1127,10 @@ TEST_P(IndexedContentTest, MaybeAddIndexedContentTest) {
     parameters.return_attributes.push_back(query::ReturnAttribute{
         .identifier = std::move(identifier), .alias = std::move(alias)});
   }
-  parameters.no_content = test_case.no_content;
+  parameters.all_content = !test_case.no_content;
+  if (test_case.no_content) {
+    parameters.return_attributes.clear();
+  }
 
   absl::StatusOr<std::vector<indexes::Neighbor>> got;
   if (test_case.input.ok()) {

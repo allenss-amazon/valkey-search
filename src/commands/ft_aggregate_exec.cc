@@ -995,9 +995,15 @@ absl::StatusOr<std::pair<size_t, size_t>> PrepareNeighborRecords(
     scores_index = AggregateParameters::kScoreColumn;
   }
 
-  query::ProcessNeighborsForReply(
-      ctx, parameters.index_schema->GetAttributeDataType(), neighbors,
-      parameters, vector_identifier);
+  // Nothing to fetch means nothing to fetch: an aggregate with no LOAD clause
+  // reads only `__key` and the score, both of which come off the neighbor.
+  // Without this the fetch would read whole keys and then hand them to the
+  // reply as extra fields.
+  if (!parameters.WantsNoContent()) {
+    query::ProcessNeighborsForReply(
+        ctx, parameters.index_schema->GetAttributeDataType(), neighbors,
+        parameters, vector_identifier);
+  }
 
   return std::make_pair(key_index, scores_index);
 }
@@ -1046,7 +1052,7 @@ absl::Status CreateRecordsFromNeighbors(
       rec->fields_.at(scores_index) = expr::Value(n.score);
     }
 
-    if (n.attribute_contents.has_value() && !parameters.no_content) {
+    if (n.attribute_contents.has_value()) {
       bool should_drop_record = false;
 
       // 1/ Each column pulls its own value out of the fetched records, keyed

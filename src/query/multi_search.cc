@@ -36,7 +36,7 @@ std::unique_ptr<MultiSearchParameters> MakeMultiSearchParameters() {
 void MultiArmShim::QueryCompleteBackground(
     std::unique_ptr<SearchParameters> self) {
   CHECK(!vmsdk::IsMainThread());
-  CHECK(no_content);
+  CHECK(WantsNoContent());
   // Hand off to the meta-tracker. We move `self` into the tracker so the
   // arm's SearchParameters (which owns string_view-backed Neighbor entries)
   // outlives the fused result.
@@ -49,7 +49,7 @@ void MultiArmShim::QueryCompleteBackground(
 void MultiArmShim::QueryCompleteMainThread(
     std::unique_ptr<SearchParameters> self) {
   CHECK(vmsdk::IsMainThread());
-  CHECK(!no_content);
+  CHECK(!WantsNoContent());
   auto tracker_copy = tracker;
   tracker.reset();
   auto result = std::move(search_result);
@@ -194,10 +194,11 @@ absl::Status PerformMultiSearchLocalAsync(
     arms[i]->cancellation_token = shared_token;
     // Run the index search only; the database content fetch + mutation check
     // is deferred until after fusion so the multi-arm result is validated
-    // atomically as a unit (see FuseThenResolveLocal). With no_content set,
-    // GetContentProcessing() returns kNoContent and the arm completes on the
-    // background thread without a per-arm ResolveContent.
-    arms[i]->no_content = true;
+    // atomically as a unit (see FuseThenResolveLocal). Asking for nothing
+    // makes GetContentProcessing() return kNoContent, so the arm completes on
+    // the background thread without a per-arm ResolveContent.
+    arms[i]->all_content = false;
+    arms[i]->return_attributes.clear();
     // Uncap each arm pre-fusion: fusion needs the full per-arm match set so
     // a doc matched by both arms is contributed by both (the "both arms or
     // neither" guarantee — see TestFtHybridParallelArmConsistency). The

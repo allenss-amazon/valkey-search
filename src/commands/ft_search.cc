@@ -135,7 +135,7 @@ void SerializeNeighbors(ValkeyModuleCtx *ctx,
       ValkeyModule_ReplyWithString(
           ctx, vmsdk::MakeUniqueValkeyString(prefixed_value).get());
     }
-    if (parameters.return_attributes.empty()) {
+    if (parameters.all_content) {
       ValkeyModule_ReplyWithArray(
           ctx, 2 * neighbors[i].attribute_contents.value().size() + 2);
       ReplyScore(ctx, *parameters.score_as, neighbors[i]);
@@ -223,7 +223,7 @@ void SerializeNonVectorNeighbors(ValkeyModuleCtx *ctx,
 
     const auto &contents = neighbors[i].attribute_contents.value();
 
-    if (command.return_attributes.empty()) {
+    if (command.all_content) {
       ValkeyModule_ReplyWithArray(ctx, 2 * contents.size());
       for (const auto &attribute_content : contents) {
         ValkeyModule_ReplyWithString(ctx,
@@ -341,7 +341,7 @@ bool HandleEarlyReplyScenarios(ValkeyModuleCtx *ctx,
     return true;  // Early reply sent, stop processing
   }
 
-  if (command.no_content) {
+  if (command.WantsNoContent()) {
     SendReplyNoContent(ctx, search_result, command);
     return true;  // Early reply sent, stop processing
   }

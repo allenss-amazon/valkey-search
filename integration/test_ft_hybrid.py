@@ -1101,6 +1101,15 @@ class TestFtHybridParallelArmConsistency(ValkeySearchTestCaseDebugMode):
             >= 1,
             timeout=5)
 
+        # Park both arms at the tail of their background search, so releasing
+        # the mutation below cannot let it apply before the arms have read the
+        # index. Without this the whole query can start after the mutation
+        # lands, in which case both arms see the post-mutation document, only
+        # the VSIM arm matches it, and the reply is a consistent snapshot that
+        # nonetheless looks like a split.
+        client.execute_command(
+            "FT._DEBUG", "PAUSEPOINT", "SET", "background_search_completing")
+
         # Issue FT.HYBRID — both arms run against the still-pre-mutation index.
         hyb_thread, res, err = run_in_thread(
             lambda: self.server.get_new_client().execute_command(
@@ -1109,6 +1118,15 @@ class TestFtHybridParallelArmConsistency(ValkeySearchTestCaseDebugMode):
                 "VSIM", "@vec", "$q", "KNN", "4", "K", "5",
                 "YIELD_SCORE_AS", "v",
                 "PARAMS", "2", "q", q))
+        waiters.wait_for_true(
+            lambda: client.execute_command(
+                "FT._DEBUG", "PAUSEPOINT", "TEST",
+                "background_search_completing") == 2,
+            timeout=5)
+        client.execute_command(
+            "FT._DEBUG", "PAUSEPOINT", "RESET",
+            "background_search_completing")
+
         # Release the mutation; both the parked HSET AND the FT.HYBRID's
         # post-fusion contention check unblock; the resolver re-runs once the
         # mutation applies and replies with post-mutation content.

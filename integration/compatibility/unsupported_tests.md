@@ -125,23 +125,7 @@ field's name, two renames at once, renames referenced by a following `SORTBY`,
 `APPLY` or `GROUPBY`, and — on a JSON index — loads and renames written as a
 JSON path.
 
-### 5.2. Field references under `LOAD *` on a JSON index — `excluded`
-
-**Status:** open, tracked outside this suite.
-
-Naming an indexed field in a pipeline stage — `GROUPBY 1 @color`,
-`SORTBY 2 @price ASC` — does not resolve under `LOAD *` on a JSON index,
-because the document arrives as a single `$` column. Writing the field into the
-LOAD clause explicitly (`LOAD 1 @color GROUPBY 1 @color`) works; only the
-implicit `LOAD *` form does not.
-
-This is an FT.AGGREGATE limitation rather than an FT.HYBRID one: the equivalent
-FT.AGGREGATE query has the same problem. The JSON variants of
-`test_groupby_reduce` and the field-sorting cases of `test_sortby` are
-therefore recorded `excluded` — comparing them here would test that gap instead
-of FT.HYBRID.
-
-### 5.3. Reference engine image — TODO
+### 5.2. Reference engine image — TODO
 
 **Status:** temporary.
 

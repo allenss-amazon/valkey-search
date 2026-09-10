@@ -189,11 +189,17 @@ void SendReplyTest::DoSendReplyTest(
   parameters->score_as = vmsdk::MakeUniqueValkeyString(score_as);
   parameters->k = 20;
   parameters->limit = input.limit;
-  parameters->no_content = no_content;
   parameters->with_scores = input.with_scores;
   for (const auto &return_attribute : input.return_attributes) {
     parameters->return_attributes.push_back(
         ToReturnAttribute(return_attribute));
+  }
+  // A case that names attributes is asking for exactly those; one that names
+  // none is asking for the whole record. NOCONTENT overrides both.
+  parameters->all_content =
+      !no_content && parameters->return_attributes.empty();
+  if (no_content) {
+    parameters->return_attributes.clear();
   }
   auto neighbor_count = neighbors.size();
   query::SearchResult wrapper(neighbor_count, std::move(neighbors),
@@ -496,7 +502,7 @@ TEST_F(ValkeySearchTest, NoContentWithScoresEmitsScore) {
   parameters->score_as = vmsdk::MakeUniqueValkeyString("score_as");
   parameters->k = 20;
   parameters->limit = {.first_index = 0, .number = 10};
-  parameters->no_content = true;
+  parameters->all_content = false;
   parameters->with_scores = true;
   // Mark the query as text-bearing so the relevance score is emitted.
   parameters->filter_parse_results.query_operations =

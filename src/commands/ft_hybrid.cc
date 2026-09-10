@@ -201,13 +201,6 @@ void MarkContentResolved(std::vector<indexes::Neighbor> &neighbors) {
   }
 }
 
-// Whether the resolved LOAD clause asks for any database field at all. `LOAD *`
-// asks for all of them and leaves the attribute list empty by convention, so it
-// is checked separately.
-bool WantsNoDatabaseContent(const aggregate::AggregateParameters &agg) {
-  return !agg.loadall_ && agg.return_attributes.empty();
-}
-
 std::vector<query::ReturnAttribute> CopyReturnAttributes(
     const std::vector<query::ReturnAttribute> &src) {
   std::vector<query::ReturnAttribute> out;
@@ -244,7 +237,7 @@ class FusedResolver : public query::SearchParameters {
   // FT.HYBRID always runs the contention check on the fused result, even when
   // the LOAD clause asks for no database field: the check is what makes the
   // multi-arm result atomic, and that is worth having whatever the reply
-  // carries. ResolveContent skips only the fetch when no_content is set.
+  // carries. ResolveContent skips only the fetch when nothing was asked for.
   query::ContentProcessing GetContentProcessing() const override {
     return query::kContentionCheckRequired;
   }
@@ -292,7 +285,7 @@ void FuseThenResolveLocal(std::unique_ptr<MultiSearchParameters> params) {
   if (params->agg != nullptr) {
     resolver->return_attributes =
         CopyReturnAttributes(params->agg->return_attributes);
-    resolver->no_content = WantsNoDatabaseContent(*params->agg);
+    resolver->all_content = params->agg->all_content;
   }
   resolver->saved_aliases = SaveAndClearAliases(fused);
   resolver->search_result.total_count = fused.size();
@@ -319,9 +312,9 @@ void ResolveFusedContentInline(ValkeyModuleCtx *ctx,
   if (params.agg != nullptr) {
     resolver.return_attributes =
         CopyReturnAttributes(params.agg->return_attributes);
-    resolver.no_content = WantsNoDatabaseContent(*params.agg);
+    resolver.all_content = params.agg->all_content;
   }
-  if (!resolver.no_content) {
+  if (!resolver.WantsNoContent()) {
     query::ProcessNeighborsForReply(ctx,
                                     params.index_schema->GetAttributeDataType(),
                                     fused, resolver, std::nullopt);
@@ -394,7 +387,8 @@ absl::Status MultiSearchParameters::ExecuteSyncLocal(
   for (auto &arm : cmd->arms) {
     // Run the index search only; defer the database content fetch until after
     // fusion so the multi-arm result is validated as a unit.
-    arm->no_content = true;
+    arm->all_content = false;
+    arm->return_attributes.clear();
     auto s = query::Search(*arm, query::SearchMode::kLocal);
     if (!s.ok()) {
       ValkeyModule_ReplyWithError(ctx, s.message().data());

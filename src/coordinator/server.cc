@@ -129,14 +129,14 @@ class RemoteResponderSearch : public query::SearchParameters {
   void QueryCompleteBackground(
       std::unique_ptr<SearchParameters> self) override {
     CHECK(!vmsdk::IsMainThread());
-    CHECK(no_content);
+    CHECK(WantsNoContent());
     QueryCompleteImpl();
   }
 
   void QueryCompleteMainThread(
       std::unique_ptr<SearchParameters> self) override {
     CHECK(vmsdk::IsMainThread());
-    CHECK(!no_content);  // Shouldn't be here!
+    CHECK(!WantsNoContent());  // Shouldn't be here!
     QueryCompleteImpl();
   }
 

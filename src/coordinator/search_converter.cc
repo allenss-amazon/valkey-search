@@ -275,7 +275,15 @@ absl::Status GRPCSearchRequestToParameters(
   parameters->ef = request.ef();
   parameters->limit = query::LimitParameter{request.limit().first_index(),
                                             request.limit().number()};
-  parameters->no_content = request.no_content();
+  if (request.has_all_content()) {
+    parameters->all_content = request.all_content();
+  } else {
+    // A sender that predates `all_content` encoded the whole-record request as
+    // "not no_content, and no named attributes". Recover it, so a mixed-version
+    // fanout does not silently turn `LOAD *` into a fetch of nothing.
+    parameters->all_content =
+        !request.no_content() && request.return_parameters().empty();
+  }
   parameters->enable_partial_results = request.enable_partial_results();
   parameters->enable_consistency = request.enable_consistency();
   if (request.has_root_filter_predicate()) {
@@ -443,7 +451,13 @@ std::unique_ptr<SearchIndexPartitionRequest> ParametersToGRPCSearchRequest(
   request->mutable_limit()->set_first_index(parameters.limit.first_index);
   request->mutable_limit()->set_number(parameters.limit.number);
   request->set_timeout_ms(parameters.timeout_ms);
-  request->set_no_content(parameters.no_content);
+  request->set_all_content(parameters.all_content);
+  // Also written in the pre-`all_content` encoding so an older receiver still
+  // reads the right intent. The one state it cannot express is a whole-record
+  // request *with* named attributes -- JSON `LOAD *` plus the paths a stage
+  // needs -- which such a receiver would read as the whole record alone. That
+  // is the behavior it had before this field existed.
+  request->set_no_content(parameters.WantsNoContent());
   request->set_enable_partial_results(parameters.enable_partial_results);
   request->set_enable_consistency(parameters.enable_consistency);
   if (parameters.filter_parse_results.root_predicate != nullptr) {

@@ -42,12 +42,14 @@ struct RealIndexInterface : public IndexInterface {
 absl::Status ManipulateReturnsClause(AggregateParameters &params) {
   // Figure out what fields actually need to be returned by the aggregation
   // operation. And modify the common search returns list accordingly
-  CHECK(!params.no_content);
-  bool content = false;
-  if (params.loadall_) {
-    CHECK(params.return_attributes.empty());
-    return absl::OkStatus();
-  } else {
+  CHECK(params.WantsNoContent());
+  // `LOAD *` asks for the whole record. That is recorded on its own flag
+  // rather than as "no named attributes", so the named list below is still
+  // built: on a JSON index the whole record arrives as one `$` blob, which
+  // satisfies no pipeline stage's `@field`, and those fields have to be
+  // fetched by path alongside it.
+  params.all_content = params.loadall_;
+  {
     std::vector<LoadField> loads_to_process = params.loads_;
 
     // A field named by a pipeline stage but absent from the LOAD clause still
@@ -121,7 +123,6 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
         }
         continue;
       }
-      content = true;
       VMSDK_ASSIGN_OR_RETURN(auto indexer,
                              params.index_schema->GetIndex(identifier));
       auto indexer_type = indexer->GetIndexerType();
@@ -155,7 +156,6 @@ absl::Status ManipulateReturnsClause(AggregateParameters &params) {
       }
     }
   }
-  params.no_content = !content;
   return absl::OkStatus();
 }
 

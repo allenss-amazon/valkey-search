@@ -216,7 +216,33 @@ struct SearchParameters {
   std::optional<unsigned> ef;
   LimitParameter limit;
   uint64_t timeout_ms{0};
-  bool no_content{false};
+  // What to fetch from the database, together with `return_attributes`:
+  //
+  //   all_content  return_attributes   fetched
+  //   -----------  -----------------   -------------------------------------
+  //   false        empty               nothing   (NOCONTENT, RETURN 0, LOAD 0)
+  //   false        list                just that list
+  //   true         empty               the whole record   (LOAD *, no RETURN)
+  //   true         list                the whole record *and* that list
+  //
+  // The last row is why this is a flag rather than "the list is empty": on a
+  // JSON index `LOAD *` fetches the root document under `$`, which satisfies
+  // no named path, so a pipeline stage naming `@color` needs `$.color`
+  // fetched alongside it. On a HASH index the whole record is every field, so
+  // the list adds nothing and the fetch ignores it.
+  //
+  // Defaults to false -- nothing -- so that a caller which forgets to say what
+  // it wants under-fetches visibly rather than silently reading whole keys.
+  // FT.SEARCH sets it at the start of its parse, since a bare FT.SEARCH
+  // returns every field.
+  bool all_content{false};
+  // True when nothing at all is to be fetched. Replaces the former
+  // `no_content` member, which could not distinguish "nothing" from "the whole
+  // record" once the whole-record request stopped being spelled as an empty
+  // list.
+  bool WantsNoContent() const {
+    return !all_content && return_attributes.empty();
+  }
   FilterParseResults filter_parse_results;
   std::vector<ReturnAttribute> return_attributes;
   bool inorder{false};

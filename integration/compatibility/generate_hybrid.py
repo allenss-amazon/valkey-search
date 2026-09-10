@@ -29,7 +29,6 @@ BM25STD is the only scorer swept; it is the default on both engines, and is
 named explicitly so the reference answers do not depend on that default.
 """
 
-import os
 import struct
 
 import pytest
@@ -162,23 +161,6 @@ class TestHybridCompatibility(BaseCompatibilityTest):
     def setup_data(self, key_type):
         super().setup_data(self.DATA_SET, key_type)
 
-    def record_excluded(self, cmd):
-        """Record a command that is run against Valkey for a no-crash check
-        only, with no answer to compare against.
-
-        Used where a known Valkey limitation outside FT.HYBRID would make the
-        comparison a test of that limitation instead. Each caller says which.
-        """
-        self.answers.append({
-            "cmd": cmd,
-            "key_type": self.key_type,
-            "data_set_name": self.data_set_name,
-            "testname": os.environ.get("PYTEST_CURRENT_TEST")
-            .split(":")[-1]
-            .split(" ")[0],
-            "excluded": True,
-        })
-
     def hybrid(
         self,
         key_type,
@@ -193,7 +175,6 @@ class TestHybridCompatibility(BaseCompatibilityTest):
         limit=PINNED_LIMIT,
         load=LOAD_ALL,
         tail=(),
-        excluded=False,
         xfail=False,
     ):
         """Issue one FT.HYBRID command and record the reference answer.
@@ -236,9 +217,6 @@ class TestHybridCompatibility(BaseCompatibilityTest):
             "PARAMS", "2", "q",
             struct.pack(f"<{HYBRID_VECTOR_DIM}f", *QUERY_VECTORS[vector]),
         ]
-        if excluded:
-            self.record_excluded(cmd)
-            return
         self.execute_command(cmd)
         if xfail:
             self.answers[-1]["xfail"] = True
@@ -427,33 +405,21 @@ class TestHybridCompatibility(BaseCompatibilityTest):
         for limit in [("0", "1"), ("0", "5"), ("2", "5"), ("0", "100")]:
             self.hybrid(key_type, "@title:alpha", limit=limit)
 
-    # A pipeline stage that names an indexed field -- SORTBY @price, GROUPBY
-    # @color -- cannot resolve it on a JSON index under `LOAD *`: Valkey
-    # returns the document as a single `$` column and never materializes the
-    # individual fields. That is an FT.AGGREGATE limitation (the same
-    # FT.AGGREGATE query has the same problem), not an FT.HYBRID one, so the
-    # JSON variants are recorded for a no-crash check only rather than turning
-    # this suite into a test of that gap.
-    _FIELD_REF_UNRESOLVED_ON_JSON = "json"
-
+    # A pipeline stage naming an indexed field -- SORTBY @price, GROUPBY
+    # @color -- resolves under `LOAD *` on both key types. On JSON the whole
+    # record is the `$` root document, which satisfies no named path, so the
+    # paths those stages need are fetched alongside it.
     def test_sortby(self, key_type):
         self.setup_data(key_type)
-        excluded = key_type == self._FIELD_REF_UNRESOLVED_ON_JSON
         for sort in [
             ["SORTBY", "2", "@price", "ASC"],
             ["SORTBY", "2", "@price", "DESC"],
             ["SORTBY", "2", "@hybrid_score", "DESC"],
         ]:
-            # Sorting on the fused score needs no field resolution, so it is
-            # compared on both key types.
-            is_score_sort = "@hybrid_score" in sort
-            self.hybrid(key_type, "@title:alpha", tail=sort,
-                        excluded=excluded and not is_score_sort)
+            self.hybrid(key_type, "@title:alpha", tail=sort)
 
     def test_groupby_reduce(self, key_type):
         self.setup_data(key_type)
-        # GROUPBY names @color; see _FIELD_REF_UNRESOLVED_ON_JSON above.
-        excluded = key_type == self._FIELD_REF_UNRESOLVED_ON_JSON
         for reduce in [
             ["REDUCE", "COUNT", "0", "AS", "cnt"],
             ["REDUCE", "SUM", "1", "@price", "AS", "total"],
@@ -464,7 +430,6 @@ class TestHybridCompatibility(BaseCompatibilityTest):
                 key_type,
                 "@title:alpha",
                 tail=["GROUPBY", "1", "@color", *reduce],
-                excluded=excluded,
             )
 
     def test_apply(self, key_type):

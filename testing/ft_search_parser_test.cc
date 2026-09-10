@@ -285,10 +285,13 @@ void DoVectorSearchParserTest(const FTSearchParserTestCase &test_case,
       EXPECT_TRUE(search_params.value()->attribute_alias.empty());
       EXPECT_EQ(search_params.value()->score_as.get(), nullptr);
     }
-    EXPECT_EQ(search_params.value()->no_content,
-              no_content || test_case.no_content);
+    const bool expect_no_content = no_content || test_case.no_content;
+    EXPECT_EQ(search_params.value()->WantsNoContent(), expect_no_content);
+    // NOCONTENT (or RETURN 0) leaves nothing requested, so a RETURN clause
+    // alongside it contributes no attributes -- it used to leave them parsed
+    // but unused.
     EXPECT_EQ(search_params.value()->return_attributes.size(),
-              test_case.return_attributes.size());
+              expect_no_content ? 0u : test_case.return_attributes.size());
     if (!test_case.no_content) {
       for (const auto &attribute : search_params.value()->return_attributes) {
         auto it = test_case.return_attributes.find(

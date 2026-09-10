@@ -181,15 +181,31 @@ std::unique_ptr<vmsdk::ParamParser<SearchCommand>> ConstructSortByParser() {
         return absl::OkStatus();
       });
 }
+// NOCONTENT asks for no field at all, and wins over a RETURN clause on either
+// side of it. Only noted here; ParseCommand applies it after the whole command
+// has been read.
+std::unique_ptr<vmsdk::ParamParser<SearchCommand>> ConstructNoContentParser() {
+  return std::make_unique<vmsdk::ParamParser<SearchCommand>>(
+      [](SearchCommand &parameters, vmsdk::ArgsIterator &itr) -> absl::Status {
+        parameters.nocontent_requested = true;
+        return absl::OkStatus();
+      });
+}
+
 std::unique_ptr<vmsdk::ParamParser<SearchCommand>> ConstructReturnParser() {
   return std::make_unique<vmsdk::ParamParser<SearchCommand>>(
       [](SearchCommand &parameters, vmsdk::ArgsIterator &itr) -> absl::Status {
         uint32_t cnt{0};
         VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, cnt));
         if (cnt == 0) {
-          parameters.no_content = true;
+          // `RETURN 0` asks for no field at all -- the same thing NOCONTENT
+          // asks for, and what Redisearch documents it as meaning.
+          parameters.nocontent_requested = true;
           return absl::OkStatus();
         }
+        // A RETURN clause replaces the default whole-record request with the
+        // fields it names.
+        parameters.all_content = false;
         for (uint32_t i = 0; i < cnt; ++i) {
           vmsdk::UniqueValkeyString identifier;
           VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, identifier));
@@ -239,8 +255,7 @@ vmsdk::KeyValueParser<SearchCommand> CreateSearchParser() {
   parser.AddParamParser(query::kTimeoutParam,
                         GENERATE_VALUE_PARSER(SearchCommand, timeout_ms));
   parser.AddParamParser(query::kLimitParam, ConstructLimitParser());
-  parser.AddParamParser(query::kNoContentParam,
-                        GENERATE_FLAG_PARSER(SearchCommand, no_content));
+  parser.AddParamParser(query::kNoContentParam, ConstructNoContentParser());
   parser.AddParamParser(query::kWithSortKeysParam,
                         GENERATE_FLAG_PARSER(SearchCommand, with_sort_keys));
   parser.AddParamParser(query::kWithScoresParam,
@@ -345,7 +360,17 @@ absl::Status VerifyQueryString(query::SearchParameters &parameters) {
 }
 
 absl::Status SearchCommand::ParseCommand(vmsdk::ArgsIterator &itr) {
+  // A bare FT.SEARCH replies with every field of every matching key, so the
+  // whole-record request is where the parse starts. RETURN and NOCONTENT
+  // narrow it from there.
+  all_content = true;
   VMSDK_RETURN_IF_ERROR(SearchParser.Parse(*this, itr));
+  if (nocontent_requested) {
+    // Applied after the parse so it wins wherever NOCONTENT sat relative to a
+    // RETURN clause.
+    all_content = false;
+    return_attributes.clear();
+  }
   if (itr.DistanceEnd() > 0) {
     return absl::InvalidArgumentError(
         absl::StrCat("Unexpected parameter at position ", (itr.Position() + 1),

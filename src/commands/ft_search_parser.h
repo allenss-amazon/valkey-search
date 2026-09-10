@@ -27,6 +27,11 @@ absl::Status VerifyQueryString(query::SearchParameters &parameters);
 //
 struct SearchCommand : public QueryCommand {
   SearchCommand(int db_num) : QueryCommand(db_num) {}
+  // NOCONTENT wins over RETURN wherever the two appear relative to each other,
+  // so it cannot simply clear the request as it is parsed -- a RETURN clause
+  // after it would repopulate. Recorded here during the parse and applied once
+  // the whole command has been read.
+  bool nocontent_requested{false};
   absl::Status ParseCommand(vmsdk::ArgsIterator &itr) override;
   void SendReply(ValkeyModuleCtx *ctx,
                  query::SearchResult &search_result) override;

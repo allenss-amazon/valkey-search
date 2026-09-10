@@ -509,7 +509,7 @@ absl::StatusOr<std::vector<indexes::Neighbor>> MaybeAddIndexedContent(
   if (!results.ok()) {
     return results;
   }
-  if (parameters.no_content || parameters.return_attributes.empty()) {
+  if (parameters.all_content || parameters.return_attributes.empty()) {
     return results;
   }
   struct AttributeInfo {
@@ -1846,7 +1846,7 @@ absl::Status query::SearchParameters::PostParseQueryString() {
 }
 
 ContentProcessing SearchParameters::GetContentProcessing() const {
-  if (no_content) {
+  if (WantsNoContent()) {
     return kNoContent;
   }
   // Currently, ContentAvailable isn't detected. Future use case.

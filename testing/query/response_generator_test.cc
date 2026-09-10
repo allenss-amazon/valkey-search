@@ -108,6 +108,11 @@ TEST_P(ResponseGeneratorTest, ProcessNeighborsForReply) {
              vmsdk::MakeUniqueValkeyString(return_attribute.identifier),
          .alias = vmsdk::MakeUniqueValkeyString(return_attribute.alias)});
   }
+  // These cases build parameters directly rather than through the parser, so
+  // they have to state the request themselves: naming attributes asks for
+  // exactly those, naming none asks for the whole record (the `*_no_return`
+  // cases).
+  parameters.all_content = params.return_attributes.empty();
   parameters.filter_parse_results.filter_identifiers =
       params.filter_identifiers;
   int filter_evaluate_cnt = -1;
@@ -728,7 +733,8 @@ TEST_P(ResponseGeneratorDbParamTest, ProcessNeighborsForReplyNoContent) {
 
   UnitTestSearchParameters parameters;
   parameters.db_num = target_db;
-  parameters.no_content = true;
+  // Nothing requested: no whole-record flag and no named attributes.
+  parameters.all_content = false;
   parameters.attribute_alias = "attr";
 
   std::vector<indexes::Neighbor> neighbors;
@@ -738,10 +744,11 @@ TEST_P(ResponseGeneratorDbParamTest, ProcessNeighborsForReplyNoContent) {
   MockAttributeDataType data_type;
   EXPECT_CALL(data_type, ToProto()).WillRepeatedly(testing::Return(type));
 
+  // Nothing was requested, so nothing is named in the fetch -- including, for
+  // JSON, the root document. This used to ask for `$` regardless, because the
+  // JSON fetch was selected by "no named attributes" rather than by what the
+  // caller actually wanted.
   absl::flat_hash_set<absl::string_view> expected_identifiers;
-  if (type == data_model::AttributeDataType::ATTRIBUTE_DATA_TYPE_JSON) {
-    expected_identifiers.insert(kJsonRootElementQuery);
-  }
 
   {
     testing::InSequence s;

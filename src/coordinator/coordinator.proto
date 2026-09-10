@@ -150,6 +150,10 @@ message SearchIndexPartitionRequest {
   uint64 ef = 8;
   LimitParameter limit = 9;
   uint64 timeout_ms = 10;
+  // Superseded by `all_content` (21). Still written, and still read from a
+  // sender that predates it, because the old encoding is derivable: false with
+  // an empty `return_parameters` meant the whole record, false with a list
+  // meant that list, true meant nothing at all.
   bool no_content = 11;
   optional Predicate root_filter_predicate = 12;
   repeated ReturnParameter return_parameters = 13;
@@ -160,6 +164,12 @@ message SearchIndexPartitionRequest {
   uint64 query_operations = 18;
   optional SortByParameter sortby = 19;
   Scorer scorer = 20;
+  // Whether the whole record was asked for. Distinct from an empty
+  // `return_parameters`, which now means nothing was asked for, and able to
+  // coexist with a non-empty one: a JSON `LOAD *` fetches the root document
+  // *and* the paths a pipeline stage names. Optional so a request from a
+  // sender that predates it can be told apart from one that set it false.
+  optional bool all_content = 21;
 }
 
 message NeighborEntry {

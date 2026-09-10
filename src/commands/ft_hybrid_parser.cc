@@ -450,7 +450,6 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
     env.agg->dialect = 2;
     env.agg->cancellation_token = env.cancellation_token;
     env.agg->timeout_ms = env.timeout_ms;
-    env.agg->no_content = false;
     // Make the aggregate pipeline treat the fused result as a "scored" set so
     // the score_as -> Neighbor::score plumbing in CreateRecordsFromNeighbors
     // fires (it gates on AggregateParameters::IsVectorQuery, which checks
@@ -582,14 +581,6 @@ absl::Status ParseFtHybridCommand(MultiSearchParameters &env,
   // every field of every key, so LOAD would name columns but never narrow the
   // reply.
   VMSDK_RETURN_IF_ERROR(aggregate::ManipulateReturnsClause(*env.agg));
-
-  // ManipulateReturnsClause sets no_content when the LOAD clause asks for no
-  // database field. For FT.AGGREGATE that means there is nothing to read off
-  // a record; for FT.HYBRID there always is, because fusion injects the
-  // per-arm score aliases into each neighbor's attribute_contents. Leaving
-  // no_content set would drop them from the reply. What is *fetched* is
-  // narrowed by the resolver's return_attributes, not by this flag.
-  env.agg->no_content = false;
 
   // FT.HYBRID bounds its reply at 10 rows when the caller writes no LIMIT --
   // unlike FT.AGGREGATE, which returns everything. An explicit LIMIT stays

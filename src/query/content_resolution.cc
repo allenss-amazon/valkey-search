@@ -52,7 +52,7 @@ void ResolveContent(std::unique_ptr<SearchParameters> params) {
   // A caller that wants no content still comes through here for the checks
   // above -- FT.HYBRID runs the contention check whatever its LOAD clause
   // asked for -- but there is nothing to fetch for it.
-  if (params->no_content) {
+  if (params->WantsNoContent()) {
     params->QueryCompleteMainThread(std::move(params));
     return;
   }
