@@ -173,7 +173,7 @@ function install_test_framework() {
 
   # Remove valkey-test-framework tests
   rm -fr ${_WORKSPACE_HOME}/integration/valkeytestframework.git/tests
-  ln -sf ${_WORKSPACE_HOME}/integration/valkeytestframework.git/src ${_WORKSPACE_HOME}/integration/valkeytestframework
+  ln -sfn ${_WORKSPACE_HOME}/integration/valkeytestframework.git/src ${_WORKSPACE_HOME}/integration/valkeytestframework
   LOG_INFO "Using valkeytestframework => ${_WORKSPACE_HOME}/integration/valkeytestframework"
   print_environment_var "PYTHONPATH" "${PYTHONPATH}"
   export PYTHONPATH=${_WORKSPACE_HOME}/integration/valkeytestframework
