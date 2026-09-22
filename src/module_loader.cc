@@ -116,6 +116,14 @@ vmsdk::module::Options options = {
                 .flags = {vmsdk::module::kReadOnlyFlag},
                 .cmd_func = &vmsdk::CreateCommand<valkey_search::FTCursorCmd>,
             },
+            {
+                .cmd_name = valkey_search::kHybridCommand,
+                .permissions = ACLPermissionFormatter(
+                    valkey_search::kSearchCmdPermissions),
+                .flags = {vmsdk::module::kReadOnlyFlag,
+                          vmsdk::module::kDenyOOMFlag},
+                .cmd_func = &vmsdk::CreateCommand<valkey_search::FTHybridCmd>,
+            },
         },
     .on_load =
         [](ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc,

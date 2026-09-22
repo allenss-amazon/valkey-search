@@ -1,4 +1,4 @@
-Reads more rows from, or deletes, a cursor created by the `WITHCURSOR` option of [`FT.AGGREGATE`](ft.aggregate.md) or [`FT.SEARCH`](ft.search.md).
+Reads more rows from, or deletes, a cursor created by the `WITHCURSOR` option of [`FT.AGGREGATE`](ft.aggregate.md), [`FT.HYBRID`](ft.hybrid.md) or [`FT.SEARCH`](ft.search.md).
 
 ```
 FT.CURSOR READ <index-name> <cursor-id> [COUNT <count>]
@@ -11,15 +11,15 @@ FT.CURSOR DEL <index-name> <cursor-id>
 
 A cursor holds the rows of a query result that have not yet been returned to the client, as of when the query ran: later changes to the data are not visible. A cursor belongs to the database it was created in: it can only be read or deleted by a connection whose currently selected database is that database. If `SWAPDB` moves the cursor's index to another database, its cursors move with it. In cluster mode a cursor exists only on the node that executed the query.
 
-Reading or deleting a cursor requires the same key permissions as querying its index: a user who could not run the `FT.SEARCH` or `FT.AGGREGATE` that created the cursor cannot read or delete it either.
+Reading or deleting a cursor requires the same key permissions as querying its index: a user who could not run the query that created the cursor cannot read or delete it either.
 
 A cursor is destroyed when its last row has been read, when it is deleted with `FT.CURSOR DEL`, when it has not been read for longer than its `MAXIDLE` time, or when its index is removed (`FT.DROPINDEX`, `FLUSHDB`, `FLUSHALL`, or a replica synchronising with its primary). Reading a cursor restarts its idle time.
 
 `RESPONSE`
 
-`FT.CURSOR READ` returns a two element array. The same format is used for cursors created by both `FT.AGGREGATE` and `FT.SEARCH`.
+`FT.CURSOR READ` returns a two element array. The same format is used for cursors created by `FT.AGGREGATE`, `FT.HYBRID` and `FT.SEARCH`.
 
-1. An array whose first element is the number of rows returned, followed by one element for each row. A row of an `FT.AGGREGATE` cursor is an array of field/value pairs. A row of an `FT.SEARCH` cursor is an array containing the elements for one key of a non-cursor `FT.SEARCH` response, i.e. the key name followed by the optional score, the optional sort key and the array of field/value pairs.
+1. An array whose first element is the number of rows returned, followed by one element for each row. A row of an `FT.AGGREGATE` or `FT.HYBRID` cursor is an array of field/value pairs. A row of an `FT.SEARCH` cursor is an array containing the elements for one key of a non-cursor `FT.SEARCH` response, i.e. the key name followed by the optional score, the optional sort key and the array of field/value pairs.
 2. The cursor id to use for the next `FT.CURSOR READ`, or 0 if all rows have been returned, in which case the cursor has been destroyed.
 
 `FT.CURSOR DEL` returns OK. It applies the same checks as `FT.CURSOR READ`: `<index-name>` must name an existing index, which need not be the cursor's own, the cursor must belong to the currently selected database, and the user must have permission to read the cursor's index.

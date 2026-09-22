@@ -619,3 +619,135 @@ class TestCursorContentsCME(ValkeySearchClusterTestCaseDebugMode,
             build_corpus(cluster_client, key_type, nodes)
             # The query fans out from the node it is sent to.
             self.run_case(nodes[0], command, query_type, False, timeout, nodes)
+
+
+# FT.HYBRID feeds its fused results through the FT.AGGREGATE pipeline, so a
+# WITHCURSOR on it must page exactly like one on FT.AGGREGATE.
+HYBRID_INDEX = "hidx"
+HYBRID_DOCS = 12
+
+
+def build_hybrid_corpus(client: Valkey, nodes=None):
+    client.execute_command(
+        "FT.CREATE", HYBRID_INDEX, "ON", "HASH", "PREFIX", "1", "hd:",
+        "SCHEMA", "title", "TEXT", "category", "TAG",
+        "vec", "VECTOR", "HNSW", "6", "TYPE", "FLOAT32", "DIM", "4",
+        "DISTANCE_METRIC", "L2")
+    for i in range(1, HYBRID_DOCS + 1):
+        client.execute_command(
+            "HSET", f"hd:{i:02d}", "title", f"hello world {i}",
+            "category", f"cat{i % 2}",
+            "vec", struct.pack("<4f", i, i * 2, i * 3, i * 4))
+    for node in (nodes or [client]):
+        waiters.wait_for_true(
+            lambda n=node: IndexingTestHelper.is_indexing_complete_on_node(
+                n, HYBRID_INDEX))
+
+
+def hybrid(client: Valkey, *extra):
+    """FT.HYBRID over every document, sorted by key so both replies agree."""
+    return client.execute_command(
+        "FT.HYBRID", HYBRID_INDEX,
+        "SEARCH", "@title:hello",
+        "VSIM", "@vec", "$q", "KNN", "2", "K", str(HYBRID_DOCS),
+        "COMBINE", "RRF", "4", "WINDOW", str(HYBRID_DOCS * 2),
+        "YIELD_SCORE_AS", "hs",
+        "LOAD", "2", "@__key", "@category",
+        "SORTBY", "2", "@__key", "ASC", "LIMIT", "0", "100",
+        *extra,
+        "PARAMS", "2", "q", struct.pack("<4f", 1, 2, 3, 4))
+
+
+def page_hybrid(client: Valkey, count: int):
+    """Rows of a WITHCURSOR FT.HYBRID paged to exhaustion, plus the batches."""
+    batch, cursor = hybrid(client, "WITHCURSOR", "COUNT", str(count))
+    batches = [batch]
+    while cursor:
+        batch, cursor = client.execute_command(
+            "FT.CURSOR", "READ", HYBRID_INDEX, cursor)
+        batches.append(batch)
+    rows = []
+    for batch in batches:
+        assert batch[0] == len(batch) - 1
+        rows += batch[1:]
+    return rows, batches
+
+
+class HybridCursorMixin:
+    def check_paging_matches_plain_reply(self, client: Valkey):
+        plain = hybrid(client)
+        total = plain[0]
+        assert total > 5, plain
+        rows, batches = page_hybrid(client, 3)
+        # The cursor returns exactly the rows of the reply without WITHCURSOR,
+        # in the same order, 3 per batch.
+        assert rows == plain[1:]
+        assert [b[0] for b in batches] == (
+            [3] * (total // 3) + ([total % 3] if total % 3 else []))
+        waiters.wait_for_equal(lambda: num_cursors(client), 0)
+
+
+class TestHybridCursor(ValkeySearchTestCaseDebugMode, HybridCursorMixin):
+    def _client(self) -> Valkey:
+        client: Valkey = self.server.get_new_client()
+        build_hybrid_corpus(client)
+        return client
+
+    def test_paging_matches_plain_reply(self):
+        self.check_paging_matches_plain_reply(self._client())
+
+    def test_all_rows_in_first_reply(self):
+        client = self._client()
+        total = hybrid(client)[0]
+        batch, cursor = hybrid(client, "WITHCURSOR")  # default COUNT is 1000
+        assert batch[0] == total
+        assert cursor == 0
+        assert num_cursors(client) == 0
+
+    def test_read_count_and_del(self):
+        client = self._client()
+        assert hybrid(client)[0] > 6
+        batch, cursor = hybrid(client, "WITHCURSOR", "COUNT", "2")
+        assert batch[0] == 2
+        # READ without COUNT reuses the WITHCURSOR COUNT; a COUNT replaces it.
+        batch, cursor = client.execute_command(
+            "FT.CURSOR", "READ", HYBRID_INDEX, cursor)
+        assert batch[0] == 2
+        batch, cursor = client.execute_command(
+            "FT.CURSOR", "READ", HYBRID_INDEX, cursor, "COUNT", "1")
+        assert batch[0] == 1
+        batch, cursor = client.execute_command(
+            "FT.CURSOR", "READ", HYBRID_INDEX, cursor)
+        assert batch[0] == 1
+        assert cursor != 0  # 6 rows read, more remain
+        assert num_cursors(client) == 1
+        # The query is over even though the cursor holds its output.
+        waiters.wait_for_equal(
+            lambda: int(client.info("SEARCH")["search_async_queries_in_flight"]), 0)
+        assert client.execute_command(
+            "FT.CURSOR", "DEL", HYBRID_INDEX, cursor) == b"OK"
+        assert num_cursors(client) == 0
+
+    def test_index_drop_discards_the_cursor(self):
+        client = self._client()
+        _, cursor = hybrid(client, "WITHCURSOR", "COUNT", "3")
+        assert num_cursors(client) == 1
+        client.execute_command("FT.DROPINDEX", HYBRID_INDEX)
+        assert num_cursors(client) == 0
+
+    def test_bad_withcursor_is_rejected(self):
+        client = self._client()
+        with pytest.raises(ResponseError, match="COUNT must be between 1 and"):
+            hybrid(client, "WITHCURSOR", "COUNT", "0")
+        assert num_cursors(client) == 0
+
+
+class TestHybridCursorCluster(ValkeySearchClusterTestCaseDebugMode,
+                              HybridCursorMixin):
+    def test_paging_matches_plain_reply(self):
+        cluster_client = self.new_cluster_client()
+        nodes = [self.client_for_primary(i)
+                 for i in range(len(self.replication_groups))]
+        build_hybrid_corpus(cluster_client, nodes)
+        # The query fans out; the cursor lives on the node that ran it.
+        self.check_paging_matches_plain_reply(nodes[0])

@@ -124,6 +124,15 @@ std::string StringToHex(std::string_view s);
 // Pass a previous result as `crc` to extend it over more data.
 uint32_t Crc32(absl::string_view data, uint32_t crc = 0);
 
+#ifdef __linux__
+// realpath(3), without calling libc's realpath: the module defines realpath
+// itself (vmsdk/src/memory_allocation_c_api.cc) and delegates here, since its
+// own name binds to that definition and would recurse. With a buffer, the
+// result is written there, which must hold PATH_MAX bytes. With nullptr, the
+// result is allocated with strdup and must be released with free().
+char *RealPath(const char *path, char *resolved_path);
+#endif
+
 // Checks if a numeric value falls within an optional inclusive range [min,
 // max]. The range is inclusive: a value is considered valid if min <= value <=
 // max. If either boundary is not specified (`std::nullopt`), that check is

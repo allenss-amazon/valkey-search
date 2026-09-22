@@ -9,7 +9,10 @@ set(SRCS_COMMANDS
     ${CMAKE_CURRENT_LIST_DIR}/ft_cursor.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_debug.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_dropindex.cc
-    ${CMAKE_CURRENT_LIST_DIR}/ft_info.cc 
+    ${CMAKE_CURRENT_LIST_DIR}/ft_hybrid.cc
+    ${CMAKE_CURRENT_LIST_DIR}/ft_hybrid_parser.cc
+    ${CMAKE_CURRENT_LIST_DIR}/ft_hybrid_combine.h
+    ${CMAKE_CURRENT_LIST_DIR}/ft_info.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_internal_update.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_list.cc
     ${CMAKE_CURRENT_LIST_DIR}/ft_search.cc
@@ -29,6 +32,8 @@ target_link_libraries(commands PUBLIC schema_manager)
 target_link_libraries(commands PUBLIC valkey_search)
 target_link_libraries(commands PUBLIC vector_base)
 target_link_libraries(commands PUBLIC fanout)
+target_link_libraries(commands PUBLIC rank_fusion)
+target_link_libraries(commands PUBLIC multi_search)
 target_link_libraries(commands PUBLIC response_generator)
 target_link_libraries(commands PUBLIC search)
 target_link_libraries(commands PUBLIC vmsdklib)
