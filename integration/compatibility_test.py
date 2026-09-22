@@ -99,7 +99,12 @@ def parse_field(x, key_type):
 
 def parse_value(x, key_type):
     try:
-        if isinstance(x, list):
+        if x is None:
+            # RESP nil: an APPLY whose expression evaluated to nothing.
+            # Both engines can return this (e.g. a string function applied to
+            # a numeric field on JSON), so represent it as None on both sides.
+            result = None
+        elif isinstance(x, list):
             # TOLIST reducer returns a Python list for both hash and json
             result = x
         elif key_type == "json" and isinstance(x, int):
@@ -178,6 +183,32 @@ def unpack_agg_result(rs, key_type):
         raise
     return rows
 
+def order_insensitive(v):
+    """Row-ordering form of a field value.
+
+    A TOLIST field comes back in a different element order from each engine, so
+    a row keyed on one would otherwise sort differently on each side and the
+    two replies would be compared row-against-the-wrong-row.
+    """
+    if isinstance(v, list):
+        return sorted(repr(order_insensitive(i)) for i in v)
+    return repr(v)
+
+
+def row_sort_key(sortkeys):
+    # Rows that tie on the sort keys are ordered by their whole content, so
+    # equal-keyed rows still line up between the two replies.
+    def key(row):
+        # A sort key can be absent from a row: a field the key never had is
+        # left out of the reply, so `sortby 2 @t2 asc` over a dataset where
+        # some documents lack t2 yields rows without it. Both engines omit it
+        # the same way, so a shared placeholder keeps those rows comparable
+        # and lets the whole-content tiebreak below order them.
+        return ([order_insensitive(row.get(k)) for k in sortkeys],
+                sorted((repr(k), order_insensitive(v)) for k, v in row.items()))
+    return key
+
+
 def unpack_result(cmd, key_type, rs, sortkeys):
     if "ft.search" in cmd[0].lower():
         # Detect if the result actually has sort keys by checking the format,
@@ -193,7 +224,7 @@ def unpack_result(cmd, key_type, rs, sortkeys):
     #
     if len(sortkeys) > 0:
         try:
-            out.sort(key=itemgetter(*sortkeys))
+            out.sort(key=row_sort_key(sortkeys))
         except KeyError:
             if sortkeys == ['__key']:
                 # we're not smart about when there is or isn't a key in the return
@@ -205,9 +236,25 @@ def unpack_result(cmd, key_type, rs, sortkeys):
             assert False
     return out
 
+def _is_numeric(x):
+    # nan/-nan don't survive float() on every platform, so name them explicitly.
+    if x in ("nan", "-nan", b"nan", b"-nan"):
+        return True
+    try:
+        float(x)
+        return True
+    except (ValueError, TypeError):
+        return False
+
 def compare_number_eq(l, r):
     lnan = l in ["nan", b"nan", "-nan", b"-nan"]
     rnan = r in ["nan", b"nan", "-nan", b"-nan"]
+
+    # A numeric field can come back as a RESP nil -- GROUPBY on a field some
+    # documents lack names the group's key with one. float(None) raises, so
+    # without this two identical nil replies read as a mismatch.
+    if l is None or r is None:
+        return l is None and r is None
 
     if lnan and rnan:
         return True
@@ -294,8 +341,22 @@ def compare_row(l, r, key_type):
             except json.decoder.JSONDecodeError:
                 print("JSON decode error comparing: ", l[lks[i]], " and ", r[rks[i]])
                 return False
-        elif l[lks[i]] != r[rks[i]]:
-            print("mismatch field: ", lks[i], " and ", rks[i], " ", l[lks[i]], "!=", r[rks[i]])
+        else:
+            lv, rv = l[lks[i]], r[rks[i]]
+            # Exact match is the fast path, which is what every loaded/stored
+            # field hits.
+            if lv == rv:
+                continue
+            # Values differ byte-for-byte. If both are numeric, fall back to the
+            # tolerant numeric compare -- it treats nan/-nan as equal and uses
+            # math.isclose, absorbing the two engines' differing float precision
+            # and negative-zero formatting on any server-computed numeric field
+            # (APPLY results, GROUPBY reducers). Non-numeric values (concat/
+            # lower/substr/timefmt string results, tags, keys) stay an exact
+            # match.
+            if _is_numeric(lv) and _is_numeric(rv) and compare_number_eq(lv, rv):
+                continue
+            print("mismatch field: ", lks[i], " and ", rks[i], " ", lv, "!=", rv)
             return False
     return True            
     
@@ -307,20 +368,25 @@ def compare_results(expected, results):
         print("CMD Mismatch: ", cmd, " ", results["cmd"])
         assert False
     
-    if 'groupby' in cmd and 'sortby' in cmd:
-        assert False
-    if 'groupby' in cmd:
-        ix = cmd.index('groupby')
-        count = int(cmd[ix+1])
-        sortkeys = [cmd[ix+2+i][1:] for i in range(count)]
-    elif 'sortby' in cmd:
-        ix = cmd.index('sortby')
-        count = int(cmd[ix+1]) if cmd[0] != 'ft.search' else 1
+    # Key on the *last* GROUPBY/SORTBY in the pipeline: it decides which fields
+    # the reply carries, and an earlier GROUPBY's key is gone from the output
+    # once a later stage regroups.
+    def last_index(keyword):
+        # Match exactly, as this has always done: an uppercase SORTBY in an
+        # FT.SEARCH goes down the "no sort keys" path.
+        hits = [i for i, c in enumerate(cmd) if c == keyword]
+        return hits[-1] if hits else -1
+
+    gix = last_index('groupby')
+    six = last_index('sortby')
+    if gix > six:
+        count = int(cmd[gix+1])
+        sortkeys = [cmd[gix+2+i][1:] for i in range(count)]
+    elif six >= 0:
+        count = int(cmd[six+1]) if cmd[0] != 'ft.search' else 1
         # Grab the fields after the count, stripping any leading '@'
-        sortkeys = [cmd[ix+2+i][1 if cmd[ix+2+i].startswith("@") else 0:] for i in range(count)]
-        for f in ['asc', 'desc', 'ASC', 'DESC']:
-            if f in sortkeys:
-                sortkeys.remove(f)
+        sortkeys = [cmd[six+2+i][1 if cmd[six+2+i].startswith("@") else 0:] for i in range(count)]
+        sortkeys = [f for f in sortkeys if f.lower() not in ('asc', 'desc')]
     else:
         sortkeys=["__key"]
         # sortkeys=[]
@@ -344,6 +410,20 @@ def compare_results(expected, results):
         print(f"RL: Result: {printable_result(expected['result'])}")
         # print(f"VK: Exception Raw: {printable_result(results['result'])}")
         print(TEST_MARKER)
+        return False
+
+    # The sortkey-prefix cases assert the sort-key bytes, which the generic
+    # unpack path below discards (unpack_search_result drops the sort-key
+    # element). The return-clause cases produce no-content replies whose
+    # 1-element stride the unpacker cannot parse. Both data sets are fully
+    # deterministic, so compare them raw.
+    if expected.get("data_set_name") in (SORTKEY_PREFIX_DATA_SET,
+                                         RETURN_CLAUSE_DATA_SET):
+        if expected["result"] == results["result"]:
+            return True
+        print(f"CMD: {cmd}")
+        print(f"RL: {printable_result(expected['result'])}")
+        print(f"VK: {printable_result(results['result'])}")
         return False
 
     # Output raw results
@@ -548,8 +628,11 @@ def _load_answers_with_hash_check(answer_file_name):
     Set SKIP_COMPATIBILITY_HASH_CHECK=1 to bypass the hash check (useful when
     manually generating a small pickle for local testing).
     """
+    root_dir = os.getenv("ROOT_DIR") or os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..")
+    )
     pickle_path = os.path.join(
-        os.getenv("ROOT_DIR"), "integration/compatibility", answer_file_name
+        root_dir, "integration/compatibility", answer_file_name
     )
     with gzip.open(pickle_path, "rb") as f:
         payload = pickle.load(f)

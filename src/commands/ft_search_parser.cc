@@ -23,6 +23,7 @@
 #include "ft_create_parser.h"
 #include "ft_search_parser.h"
 #include "src/query/search.h"
+#include "src/valkey_search_options.h"
 #include "vmsdk/src/command_parser.h"
 #include "vmsdk/src/managed_pointers.h"
 #include "vmsdk/src/module_config.h"
@@ -34,6 +35,7 @@ namespace valkey_search {
 constexpr absl::string_view kMaxKnnConfig{"max-vector-knn"};
 constexpr int kDefaultKnnLimit{10000};
 constexpr int kMaxKnn{100000};
+constexpr absl::string_view kMaxTimeoutMsConfig{"max-timeout-ms"};
 
 /// Register the "--max-knn" flag. Controls the max KNN parameter for vector
 /// search.
@@ -45,9 +47,24 @@ static auto max_knn =
         .WithValidationCallback(CHECK_RANGE(1, kMaxKnn, kMaxKnnConfig))
         .Build();
 
+/// Register the "--max-timeout-ms" flag. Controls the maximum allowed TIMEOUT
+/// value, in milliseconds, for FT.SEARCH and FT.AGGREGATE.
+static auto max_timeout_ms =
+    vmsdk::config::NumberBuilder(kMaxTimeoutMsConfig,   // name
+                                 query::kMaxTimeoutMs,  // default timeout
+                                 1,                     // min timeout
+                                 query::kMaxTimeoutMs)  // max timeout
+        .WithValidationCallback(
+            CHECK_RANGE(1, query::kMaxTimeoutMs, kMaxTimeoutMsConfig))
+        .Build();
+
 namespace options {
 vmsdk::config::Number &GetMaxKnn() {
   return dynamic_cast<vmsdk::config::Number &>(*max_knn);
+}
+
+vmsdk::config::Number &GetMaxTimeoutMs() {
+  return dynamic_cast<vmsdk::config::Number &>(*max_timeout_ms);
 }
 
 }  // namespace options
@@ -75,12 +92,13 @@ absl::Status Verify(query::SearchParameters &parameters) {
            "exceed "
         << max_knn_value << ".";
   }
-  if (parameters.timeout_ms > query::kMaxTimeoutMs) {
+  const auto max_timeout_ms = options::GetMaxTimeoutMs().GetValue();
+  if (parameters.timeout_ms > static_cast<uint64_t>(max_timeout_ms)) {
     return absl::InvalidArgumentError(
         absl::StrCat(query::kTimeoutParam,
                      " must be a positive integer greater than 0 and "
                      "cannot exceed ",
-                     query::kMaxTimeoutMs, "."));
+                     max_timeout_ms, "."));
   }
   if (parameters.dialect < 2 || parameters.dialect > 4) {
     return absl::InvalidArgumentError(
@@ -169,8 +187,25 @@ std::unique_ptr<vmsdk::ParamParser<SearchCommand>> ConstructReturnParser() {
       [](SearchCommand &parameters, vmsdk::ArgsIterator &itr) -> absl::Status {
         uint32_t cnt{0};
         VMSDK_RETURN_IF_ERROR(vmsdk::ParseParamValue(itr, cnt));
+        VALKEY_SEARCH_COMPATIBILITY_FIX(
+            1, 3, 0, "ft_search_return_last_wins",
+            [&]() {
+              // Repeated RETURN clauses are last-one-wins: a later clause
+              // replaces an earlier one, including an earlier `RETURN 0`.
+              // The no-fields decision is folded into no_content after the
+              // whole command is parsed (ParseCommand), so it cannot cancel
+              // a sticky NOCONTENT keyword.
+              parameters.return_attributes.clear();
+              parameters.return_no_fields = (cnt == 0);
+            },
+            [&]() {
+              // Legacy: `RETURN 0` latched no_content for the whole command
+              // and repeated RETURN clauses accumulated fields.
+              if (cnt == 0) {
+                parameters.no_content = true;
+              }
+            });
         if (cnt == 0) {
-          parameters.no_content = true;
           return absl::OkStatus();
         }
         for (uint32_t i = 0; i < cnt; ++i) {
@@ -317,12 +352,13 @@ absl::Status VerifyQueryString(query::SearchParameters &parameters) {
            "exceed "
         << max_knn_value << ".";
   }
-  if (parameters.timeout_ms > query::kMaxTimeoutMs) {
+  const auto max_timeout_ms = options::GetMaxTimeoutMs().GetValue();
+  if (parameters.timeout_ms > static_cast<uint64_t>(max_timeout_ms)) {
     return absl::InvalidArgumentError(
         absl::StrCat(query::kTimeoutParam,
                      " must be a positive integer greater than 0 and "
                      "cannot exceed ",
-                     query::kMaxTimeoutMs, "."));
+                     max_timeout_ms, "."));
   }
   if (parameters.dialect < 2 || parameters.dialect > 4) {
     return absl::InvalidArgumentError(
@@ -348,6 +384,13 @@ absl::Status SearchCommand::ParseCommand(vmsdk::ArgsIterator &itr) {
         absl::StrCat("Unexpected parameter at position ", (itr.Position() + 1),
                      ":", vmsdk::ToStringView(itr.Get().value())));
   }
+
+  // last "RETURN 0" will also behave like NOCONTENT.
+  // notice return_no_fields can be overwritten within a command
+  // when there are multiple RETURN's, hence it's merged at the end
+  // instead of on the fly
+  no_content = no_content || return_no_fields;
+
   VMSDK_RETURN_IF_ERROR(PreParseQueryString());
   VMSDK_RETURN_IF_ERROR(PostParseQueryString());
   VMSDK_RETURN_IF_ERROR(VerifyQueryString(*this));
