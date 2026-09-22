@@ -5,6 +5,7 @@
  *
  */
 
+#include <atomic>
 #include <memory>
 #include <string>
 #include <vector>
@@ -31,7 +32,7 @@ class FakeCursor : public Cursor {
  public:
   FakeCursor(size_t num_rows, std::string index_name = "idx",
              std::weak_ptr<IndexSchema> index_schema = {},
-             CursorOptions options = {}, bool *destroyed = nullptr)
+             CursorOptions options = {}, std::atomic<bool> *destroyed = nullptr)
       : Cursor(std::move(index_name), std::move(index_schema), options),
         num_rows_(num_rows),
         destroyed_(destroyed) {}
@@ -54,7 +55,8 @@ class FakeCursor : public Cursor {
  private:
   size_t num_rows_;
   size_t next_{0};
-  bool *destroyed_;
+  // Written from whichever thread destroys the cursor, read by the test.
+  std::atomic<bool> *destroyed_;
 };
 
 class FTCursorTest : public ValkeySearchTest {
@@ -91,7 +93,7 @@ class FTCursorTest : public ValkeySearchTest {
     return SchemaManager::Instance().GetIndexSchema(db_num, name).value();
   }
 
-  uint64_t InsertCursor(size_t num_rows, bool *destroyed = nullptr,
+  uint64_t InsertCursor(size_t num_rows, std::atomic<bool> *destroyed = nullptr,
                         int db_num = 0, std::string index_name = "idx",
                         CursorOptions options = {}) {
     auto index = GetIndex(index_name, db_num);
@@ -162,7 +164,7 @@ TEST_F(FTCursorTest, ReadToExhaustion) {
 }
 
 TEST_F(FTCursorTest, Del) {
-  bool destroyed = false;
+  std::atomic<bool> destroyed{false};
   auto id = InsertCursor(5, &destroyed);
   VMSDK_EXPECT_OK(Run(absl::StrCat("FT.CURSOR DEL idx ", id)));
   EXPECT_EQ(fake_ctx_.reply_capture.GetReply(), "+OK\r\n");
@@ -194,7 +196,7 @@ TEST_F(FTCursorTest, WrongDb) {
 }
 
 TEST_F(FTCursorTest, IndexRemovalDiscardsCursors) {
-  bool destroyed = false;
+  std::atomic<bool> destroyed{false};
   auto id = InsertCursor(5, &destroyed);
   // Cursors of other indexes and other databases are untouched.
   CreateIndex("other", 0);
@@ -332,12 +334,12 @@ TEST_F(FTCursorTest, DestructionObeysBackgroundCleanupSetting) {
   const bool saved = background.GetValue();
 
   VMSDK_EXPECT_OK(background.SetValue(false));
-  bool destroyed = false;
+  std::atomic<bool> destroyed{false};
   CursorTable::Instance().Erase(InsertCursor(1, &destroyed));
   EXPECT_TRUE(destroyed);
 
   VMSDK_EXPECT_OK(background.SetValue(true));
-  destroyed = false;
+  destroyed.store(false);
   CursorTable::Instance().Erase(InsertCursor(1, &destroyed));
   EXPECT_FALSE(destroyed);
   WaitWorkerTasksAreCompleted(*ValkeySearch::Instance().GetUtilityThreadPool());
