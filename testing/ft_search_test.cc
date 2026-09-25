@@ -566,6 +566,53 @@ TEST_F(ValkeySearchTest, WithCursorReply) {
   CursorTable::InitInstance(nullptr);
 }
 
+// A cursor holds the rows it has yet to return, and nothing more: the rows of
+// each reply are released as they are read rather than at the end. The key of
+// a released row is the last reference to its interned string, so the string
+// pool is what the test watches.
+TEST_F(ValkeySearchTest, WithCursorReleasesRowsAsTheyAreRead) {
+  CursorTable::InitInstance(std::make_unique<CursorTable>(1, 0));
+  auto parameters = std::make_unique<SearchCommand>(0);
+  parameters->timeout_ms = 10000;
+  parameters->limit = {.first_index = 1, .number = 3};
+  parameters->no_content = true;
+  parameters->cursor_options = CursorOptions{.count = 1};
+
+  const size_t interned_before = StringInternStore::Instance().UniqueStrings();
+  std::vector<indexes::Neighbor> neighbors;
+  for (auto id : {"row0", "row1", "row2", "row3", "row4"}) {
+    neighbors.push_back(ToIndexesNeighbor({.external_id = id, .score = 1.0f}));
+  }
+  auto neighbor_count = neighbors.size();
+  EXPECT_EQ(StringInternStore::Instance().UniqueStrings(),
+            interned_before + neighbor_count);
+  parameters->search_result =
+      query::SearchResult(neighbor_count, std::move(neighbors), *parameters);
+  auto *command = parameters.get();
+  command->SendReply(&fake_ctx_, command->search_result);
+  ASSERT_TRUE(command->adopted_by_cursor);
+  parameters.release();  // Owned by the cursor table.
+
+  auto &table = CursorTable::Instance();
+  auto *cursor = table.Lookup(uint64_t{1} << 32 | 1);
+  ASSERT_NE(cursor, nullptr);
+  // LIMIT 1 3 means rows 1..3 are the cursor's, and the first reply returned
+  // one of them. The row it replied, the row LIMIT skipped and the row past
+  // the window are all gone already.
+  EXPECT_EQ(cursor->RemainingRows(), 2);
+  EXPECT_EQ(StringInternStore::Instance().UniqueStrings(), interned_before + 2);
+
+  fake_ctx_.reply_capture.ClearReply();
+  cursor->ReplyRows(&fake_ctx_, nullptr, 1);
+  EXPECT_EQ(cursor->RemainingRows(), 1);
+  EXPECT_EQ(StringInternStore::Instance().UniqueStrings(), interned_before + 1);
+
+  cursor->ReplyRows(&fake_ctx_, nullptr, 1);
+  EXPECT_EQ(cursor->RemainingRows(), 0);
+  EXPECT_EQ(StringInternStore::Instance().UniqueStrings(), interned_before);
+  CursorTable::InitInstance(nullptr);
+}
+
 TEST_F(ValkeySearchTest, WithCursorNoResultsReply) {
   auto parameters = std::make_unique<SearchCommand>(0);
   parameters->limit = {.first_index = 0, .number = 0};

@@ -237,6 +237,11 @@ class CursorSearchResult : public Cursor {
     command_->index_schema = nullptr;
     // The query itself is over; only its saved output is still held.
     command_->DeclareOperationTerminated();
+    // The rows already replied, the ones LIMIT skipped, and anything past the
+    // LIMIT window are never read again.
+    auto &neighbors = command_->search_result.neighbors;
+    ReleaseRows(0, next_);
+    ReleaseRows(end_, neighbors.size());
   }
   size_t RemainingRows() const override { return end_ - next_; }
   void ReplyRows(ValkeyModuleCtx *ctx,
@@ -248,11 +253,22 @@ class CursorSearchResult : public Cursor {
     command_->index_schema = index_schema;
     command_->ReplyRows(ctx, command_->search_result, next_, next_ + n);
     command_->index_schema = nullptr;
+    // Hand back what the rows just replied were holding, rather than keeping
+    // it until the whole cursor is destroyed.
+    ReleaseRows(next_, next_ + n);
     next_ += n;
   }
   void ReleaseMainThreadState() override { command_->ReleaseMainThreadState(); }
 
  private:
+  // Frees the key and the fetched content of the neighbors in [begin, end).
+  void ReleaseRows(size_t begin, size_t end) {
+    auto &neighbors = command_->search_result.neighbors;
+    for (size_t i = begin; i < end; ++i) {
+      neighbors[i] = indexes::Neighbor();
+    }
+  }
+
   std::unique_ptr<SearchCommand> command_;
   size_t next_;
   size_t end_;
