@@ -59,6 +59,10 @@ constexpr absl::string_view kFailedPreconditionMsg{
 constexpr absl::string_view kTimeoutMsg{
     "Search operation cancelled due to timeout"};
 constexpr absl::string_view kQueueDepthMsg{"Search query queue depth exceeded"};
+// Reported when the reader thread pool refuses to schedule a search because it
+// has entered stop mode (this node is shutting down).
+constexpr absl::string_view kShuttingDownMsg{
+    "Search request rejected: the reader thread pool is shutting down"};
 constexpr uint32_t kDialect{2};
 
 // Parser keywords
@@ -257,6 +261,11 @@ struct SearchParameters {
       params.clear();
     }
   } parse_vars;
+  // Set for a VSIM arm carrying a FILTER: the filter decides which documents
+  // the vector search considers and must not touch the score, so the hybrid
+  // text score is suppressed even when the filter holds a text predicate. See
+  // ApplyHybridTextScore.
+  bool vector_score_only{false};
   bool IsNonVectorQuery() const { return attribute_alias.empty(); }
   bool IsVectorQuery() const { return !IsNonVectorQuery(); }
   // Indicates whether the search requires complete results (neighbors/keys) to
@@ -271,13 +280,15 @@ struct SearchParameters {
   // where nothing (e.g. SORTBY) requires loading and reordering the full result
   // set first. When true, the query can complete on the background thread and
   // skip content loading.
-  bool NoProcessingRequired() const {
-    return no_content && !RequiresCompleteResults();
+  virtual bool NoProcessingRequired() const {
+    return no_content && !sortby_parameter.has_value();
   }
 
   virtual absl::Status PreParseQueryString();
   virtual absl::Status PostParseQueryString();
-  ContentProcessing GetContentProcessing() const;
+  // Virtual so specialized parameter types (e.g. FT.HYBRID's fused-result
+  // resolver) can force a particular content-processing mode.
+  virtual ContentProcessing GetContentProcessing() const;
 
   // The sortby parameter, populated by FT.SEARCH SORTBY clause or
   // deserialized from gRPC requests. Available to all query operations.
@@ -337,6 +348,12 @@ using SearchResponseCallback =
 
 absl::Status Search(SearchParameters &parameters, SearchMode search_mode);
 
+// Schedules `parameters` on `thread_pool`; the search and its completion run
+// on a pool worker. Returns UnavailableError (kShuttingDownMsg) if the pool
+// refuses the task because it is in stop mode: in that case the search will
+// never run and nothing will call the parameters' completion path, so the
+// caller owns terminating whatever is waiting on the query. `parameters` is
+// consumed either way.
 absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,
                          vmsdk::ThreadPool *thread_pool,
                          SearchMode search_mode);

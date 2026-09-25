@@ -433,8 +433,10 @@ void SearchCommand::SendReply(ValkeyModuleCtx *ctx,
     return;
   }
 
-  // 2. NOCONTENT: skip content resolution entirely.
-  if (no_content) {
+  // 2. NOCONTENT without SORTBY: skip content resolution entirely. A SORTBY
+  // still needs the sort field resolved to order the reply (regression #1215),
+  // so fall through to content resolution when sortby is present.
+  if (no_content && !sortby_parameter.has_value()) {
     if (inkeys.has_value()) {
       ApplyInkeysFilter(search_result, *inkeys);
     }
@@ -457,7 +459,9 @@ void SearchCommand::SendReply(ValkeyModuleCtx *ctx,
   ApplySorting(search_result.neighbors, *this);
 
   // 5. Serialize
-  if (IsNonVectorQuery()) {
+  if (no_content) {
+    SendReplyNoContent(ctx, search_result, *this);
+  } else if (IsNonVectorQuery()) {
     SerializeNonVectorNeighbors(ctx, search_result, *this);
   } else {
     SerializeNeighbors(ctx, search_result, *this);

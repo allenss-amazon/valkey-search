@@ -454,9 +454,19 @@ void EvaluatePrefilteredKeys(
   if (needs_dedup) {
     result_keys.reserve(max_keys);
   }
+  // Skip per-key predicate re-evaluation when the query is fully solved by the
+  // entries fetchers and only yields valid keys. The non-vector path only
+  // reaches here for unsolved queries but this check benefits the hybrid
+  // pre-filter path. Note we don't score during this drain on purpose because
+  // the vast majority of keys are expected to be filtered out or miss the
+  // final KNN top-k.
+  const bool requires_prefilter_evaluation =
+      IsUnsolvedQuery(parameters.filter_parse_results.query_operations,
+                      parameters.filter_parse_results.is_match_all);
   const std::shared_ptr<indexes::text::TextIndexSchema> text_index_schema =
-      parameters.index_schema ? parameters.index_schema->GetTextIndexSchema()
-                              : nullptr;
+      requires_prefilter_evaluation && parameters.index_schema
+          ? parameters.index_schema->GetTextIndexSchema()
+          : nullptr;
   while (!entries_fetchers.empty()) {
     auto fetcher = std::move(entries_fetchers.front());
     entries_fetchers.pop();
@@ -474,15 +484,20 @@ void EvaluatePrefilteredKeys(
         iterator->Next();
         continue;
       }
-      const valkey_search::indexes::text::TextIndex *text_index =
-          text_index_schema ? text_index_schema->GetPerKeyTextIndex(key, false)
-                            : nullptr;
-      indexes::PrefilterEvaluator key_evaluator(
-          text_index, parameters.filter_parse_results.query_operations);
-      BACKGROUND_PAUSEPOINT("search_prefilter_eval");
-      // 3. Evaluate predicate
-      if (key_evaluator.Evaluate(
-              *parameters.filter_parse_results.root_predicate, key)) {
+      bool matched = true;
+      if (requires_prefilter_evaluation) {
+        const valkey_search::indexes::text::TextIndex *text_index =
+            text_index_schema
+                ? text_index_schema->GetPerKeyTextIndex(key, false)
+                : nullptr;
+        indexes::PrefilterEvaluator key_evaluator(
+            text_index, parameters.filter_parse_results.query_operations);
+        BACKGROUND_PAUSEPOINT("search_prefilter_eval");
+        // 3. Evaluate predicate
+        matched = key_evaluator.Evaluate(
+            *parameters.filter_parse_results.root_predicate, key);
+      }
+      if (matched) {
         bool result = appender(key, result_keys);
         if (needs_dedup && result) {
           result_keys.insert(key->Str().data());
@@ -1041,7 +1056,8 @@ std::optional<float> ScoreNode(const Predicate *predicate,
       // one-term invariant. doc_len is co-located in the matched posting entry.
       if (!leaf.expansion_terms.empty()) {
         for (const auto &term : leaf.expansion_terms) {
-          if (auto entry = term.postings->LookupKey(key, leaf.field_mask)) {
+          if (auto entry =
+                  term.postings->GetPostingDocStats(key, leaf.field_mask)) {
             return score_ctx.scorer->ScoreLeaf(
                 {term.idf, entry->tf, entry->doc_len, score_ctx.avg_doc_len,
                  predicate->GetWeight()});
@@ -1068,7 +1084,8 @@ std::optional<float> ScoreNode(const Predicate *predicate,
         const uint64_t field_mask = (i == 0 && leaf.has_original)
                                         ? leaf.field_mask
                                         : leaf.stem_field_mask;
-        if (auto entry = leaf.postings[i]->LookupKey(key, field_mask)) {
+        if (auto entry =
+                leaf.postings[i]->GetPostingDocStats(key, field_mask)) {
           tf += entry->tf;
           doc_len = entry->doc_len;
         }
@@ -1229,7 +1246,10 @@ void ScoreTextQuery(const IndexSchema &index_schema,
 // their score.
 void ApplyHybridTextScore(const SearchParameters &parameters,
                           std::vector<indexes::Neighbor> &neighbors) {
-  if (!QueryHasTextPredicate(parameters) || neighbors.empty()) return;
+  if (parameters.vector_score_only || !QueryHasTextPredicate(parameters) ||
+      neighbors.empty()) {
+    return;
+  }
   std::vector<indexes::BorrowedNeighbor> borrowed;
   borrowed.reserve(neighbors.size());
   for (const auto &neighbor : neighbors) {
@@ -1407,6 +1427,8 @@ absl::StatusOr<std::vector<indexes::BorrowedNeighbor>> DoSearchNonVector(
   const bool requires_prefilter_evaluation =
       IsUnsolvedQuery(parameters.filter_parse_results.query_operations,
                       parameters.filter_parse_results.is_match_all);
+  // TODO: Unify code path to rely on de-dup and unsolved checking
+  // in EvaluatePrefilteredKeys
   if (!requires_prefilter_evaluation) {
     bool needs_dedup =
         NeedsDeduplication(parameters.filter_parse_results.query_operations);
@@ -1626,7 +1648,8 @@ void SearchResult::TrimResults(std::vector<T> &vec,
       std::sort(vec.begin(), vec.end(), cmp);
     }
   } else if (parameters.IsNonVectorQuery() ||
-             QueryHasTextPredicate(parameters)) {
+             (QueryHasTextPredicate(parameters) &&
+              !parameters.vector_score_only)) {
     // Two cases sort by score descending here:
     //   - Cluster-merge non-vector path: the merged Neighbor vector is drained
     //     from the fanout heap ascending and never sorted.
@@ -1634,6 +1657,10 @@ void SearchResult::TrimResults(std::vector<T> &vec,
     //     the query score is the text relevance (set by ApplyHybridTextScore),
     //     so re-rank by it to match Redis. The vector distance is preserved on
     //     Neighbor.distance and still reported via the score_as field.
+    //
+    // A VSIM arm carrying a text pre-filter is excluded. Its score is the
+    // distance, not a relevance, so sorting by score descending would return
+    // the FARTHEST matches -- which is exactly what it did before this guard.
     // Content resolution later drops some neighbors, but drops preserve
     // relative order, so this ordering survives. Pure vector queries (no text
     // predicate) fall through and keep their distance-ascending order.
@@ -1757,8 +1784,18 @@ absl::Status Search(SearchParameters &parameters, SearchMode search_mode) {
 absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,
                          vmsdk::ThreadPool *thread_pool,
                          SearchMode search_mode) {
-  thread_pool->Schedule(
-      [parameters = std::move(parameters), search_mode]() mutable {
+  // The parameters are parked in a holder shared between this frame and the
+  // scheduled task. ThreadPool::Schedule refuses -- and destroys -- the task
+  // once the pool is in stop mode; because the holder outlives the task, a
+  // refusal hands the parameters back here instead of dropping them (and the
+  // completion callback they carry) inside a task that never runs. On the
+  // accepted path the task moves them out of the holder on its single run, so
+  // they are owned in exactly one place at any time.
+  auto holder = std::make_shared<std::unique_ptr<SearchParameters>>(
+      std::move(parameters));
+  const bool scheduled = thread_pool->Schedule(
+      [holder, search_mode]() mutable {
+        std::unique_ptr<SearchParameters> parameters = std::move(*holder);
         auto res = Search(*parameters, search_mode);
         BACKGROUND_PAUSEPOINT("background_search_completing");
         parameters->search_result.status = res;
@@ -1777,6 +1814,15 @@ absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,
         }
       },
       vmsdk::ThreadPool::Priority::kHigh);
+  if (!scheduled) {
+    // Reclaim and destroy the parameters here; the caller is told the search
+    // will never run so it can terminate whatever is waiting on it. Unavailable
+    // is deliberate: the only way Schedule refuses is a pool in stop mode, i.e.
+    // this node is shutting down, which the coordinator maps to gRPC
+    // UNAVAILABLE ("retry elsewhere") rather than a query defect.
+    parameters = std::move(*holder);
+    return absl::UnavailableError(kShuttingDownMsg);
+  }
   return absl::OkStatus();
 }
 
