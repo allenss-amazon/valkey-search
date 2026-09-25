@@ -1128,11 +1128,19 @@ absl::StatusOr<std::pair<size_t, size_t>> PrepareNeighborRecords(
         parameters.index_schema->GetIdentifier(parameters.attribute_alias));
 
     scores_index = AggregateParameters::kScoreColumn;
+  } else if (parameters.addscores_) {
+    // ADDSCORES: expose the relevance score (__score) to the pipeline.
+    scores_index = AggregateParameters::kScoreColumn;
   }
 
-  query::ProcessNeighborsForReply(
-      ctx, parameters.index_schema->GetAttributeDataType(), neighbors,
-      parameters, vector_identifier);
+  // If no content needs to be fetched from the keys to be used in the
+  // aggregation pipeline, there is no need to revalidate keys and recompute
+  // scores.
+  if (!parameters.NoProcessingRequired()) {
+    query::ProcessNeighborsForReply(
+        ctx, parameters.index_schema->GetAttributeDataType(), neighbors,
+        parameters, vector_identifier);
+  }
 
   return std::make_pair(key_index, scores_index);
 }
@@ -1177,7 +1185,7 @@ absl::Status CreateRecordsFromNeighbors(
       rec->fields_.at(key_index) = expr::Value(n.external_id->Str());
     }
 
-    if (parameters.IsVectorQuery()) {
+    if (parameters.IsVectorQuery() || parameters.addscores_) {
       rec->fields_.at(scores_index) = expr::Value(n.score);
     }
 
@@ -1201,9 +1209,10 @@ absl::Status CreateRecordsFromNeighbors(
         // YIELD_SCORE_AS named the column) must not overwrite the score with
         // it. Step 2 below drops the losing value rather than emitting it as
         // a second column, because `record_identifiers_` holds the score's
-        // name. Only a vector query has a score column at `scores_index`;
-        // otherwise `scores_index` is 0, which is the key's slot.
-        if (parameters.IsVectorQuery() && i == scores_index) {
+        // name. A vector query always has a score column at `scores_index`,
+        // and ADDSCORES adds one for non-vector queries as well.
+        if ((parameters.IsVectorQuery() || parameters.addscores_) &&
+            i == scores_index) {
           continue;
         }
         const auto &info = parameters.record_info_by_index_[i];
