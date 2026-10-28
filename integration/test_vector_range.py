@@ -2470,8 +2470,8 @@ class TestVectorRangeEfRuntimeSweep(ValkeySearchTestCaseBase):
                 f"{range_means[(n, ef)]:>8.3f} ({knn_means[(n, ef)]:.3f})"
                 for ef in self.QUERY_EFS))
 
-        print(f"{metric} walk diagnostics: flood rate, mean expanded nodes, "
-              f"recall flooded / not flooded (query count)")
+        print(f"{metric} walk diagnostics: shell-reached rate, mean expanded "
+              f"nodes, recall reached / not reached (query count)")
         for ef in self.QUERY_EFS:
             print(f"  ef={ef}")
             for n in self.BALL_SIZES:
@@ -2480,7 +2480,7 @@ class TestVectorRangeEfRuntimeSweep(ValkeySearchTestCaseBase):
                 beam = [r for f, _, r in w if not f]
                 fmt = lambda rs: (f"{mean(rs):.3f} ({len(rs):>2})" if rs
                                   else "  -   ( 0)")
-                print(f"    ball {n:>4}: flood {len(flooded) / len(w):.2f}  "
+                print(f"    ball {n:>4}: reach {len(flooded) / len(w):.2f}  "
                       f"expanded {mean([e for _, e, _ in w]):>7.1f}  "
                       f"recall {fmt(flooded)} / {fmt(beam)}")
 
