@@ -501,7 +501,8 @@ size_t EvaluateFilterAsPrimary(
           auto range_result = vector_index->SearchRange(
               vr_pred->GetQueryVector(),
               static_cast<float>(vr_pred->GetRadius()),
-              parameters.cancellation_token, vr_pred->GetSearchEpsilon());
+              parameters.cancellation_token, vr_pred->GetSearchEpsilon(),
+              /*filter=*/nullptr, vr_pred->GetEfRuntime());
           if (range_result.ok()) {
             auto fetcher =
                 std::make_unique<VectorRangeFetcher>(std::move(*range_result));
@@ -817,7 +818,9 @@ absl::StatusOr<std::vector<indexes::Neighbor>> SearchVectorRangeQuery(
             vector_index->SearchRange(vr_pred->GetQueryVector(),
                                       static_cast<float>(vr_pred->GetRadius()),
                                       parameters.cancellation_token,
-                                      vr_pred->GetSearchEpsilon()));
+                                      vr_pred->GetSearchEpsilon(),
+                                      /*filter=*/nullptr,
+                                      vr_pred->GetEfRuntime()));
         // Key order keeps SORTBY ties and FT.AGGREGATE working sets
         // deterministic regardless of scan order.
         std::sort(raw_neighbors.begin(), raw_neighbors.end(),

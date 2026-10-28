@@ -145,13 +145,16 @@ def scale_queries(rng, vectors, metric, count=SCALE_QUERIES):
     return unit_rows(queries) if metric == "IP" else queries
 
 
-def range_distances(client, index, field, query, radius, epsilon=None):
+def range_distances(client, index, field, query, radius, epsilon=None,
+                    ef_runtime=None):
     """VECTOR_RANGE query yielding the distance. Returns {key: distance}."""
     attrs = "$yield_distance_as: d"
     if epsilon is not None:
         attrs = f"$epsilon: {epsilon}; " + attrs
+    ef = f" EF_RUNTIME {ef_runtime}" if ef_runtime is not None else ""
     result = client.execute_command(
-        "FT.SEARCH", index, f"@{field}:[VECTOR_RANGE $r $BLOB]=>{{{attrs}}}",
+        "FT.SEARCH", index,
+        f"@{field}:[VECTOR_RANGE $r $BLOB{ef}]=>{{{attrs}}}",
         "PARAMS", "4", "r", f"{radius:.9g}",
         "BLOB", query.astype("<f4").tobytes(),
         "RETURN", "1", "d", "LIMIT", "0", str(2 * SCALE_KEYS),
@@ -2371,3 +2374,94 @@ class TestVectorRangeBenchmark(ValkeySearchTestCaseBase):
               f"queries: FLAT median {flat_median * 1e3:.3f} ms, "
               f"HNSW median {hnsw_median * 1e3:.3f} ms, HNSW recall {recall:.3f}")
         assert recall >= MIN_RECALL, recall
+
+
+class TestVectorRangeEfRuntimeSweep(ValkeySearchTestCaseBase):
+    """Per-query EF_RUNTIME sets the HNSW range walk's initial beam. When a
+    ball holds about EF_RUNTIME keys, the walk can stop as a KNN@ef search
+    would, so a wider per-query beam must recover the recall."""
+
+    KEYS = 50000
+    DIM = 32
+    QUERIES = 30
+    FIELD_EF = 10
+    QUERY_EFS = (5, 10, 50)
+    # ef/2, ef, 2ef and 10ef for each of QUERY_EFS.
+    BALL_SIZES = (2, 5, 10, 20, 25, 50, 100, 500)
+    # Range recall may trail KNN recall at the same ef by at most this much.
+    KNN_SLACK = 0.05
+    # Floor for every cell at the widest per-query EF_RUNTIME (measured
+    # minimum 0.967).
+    WIDE_EF_MIN_RECALL = 0.93
+
+    def knn_keys(self, client, index, field, query, n, ef):
+        """Keys of an HNSW KNN query for n neighbors at EF_RUNTIME ef."""
+        result = client.execute_command(
+            "FT.SEARCH", index,
+            f"*=>[KNN {n} @{field} $BLOB EF_RUNTIME {ef} AS d]",
+            "PARAMS", "2", "BLOB", query.astype("<f4").tobytes(),
+            "NOCONTENT", "LIMIT", "0", str(n), "DIALECT", "2",
+        )
+        return parse_result_keys(result)
+
+    @pytest.mark.parametrize("metric", ["L2", "COSINE"])
+    def test_hnsw_range_recall_follows_query_ef_runtime(self, metric):
+        """
+        On 50k clustered 32-d vectors with field EF_RUNTIME 10, sweep the
+        per-query EF_RUNTIME over 5, 10 and 50 and the ball over 2..500 keys.
+        Every HNSW key is a FLAT key at the same distance; each cell's range
+        recall is within KNN_SLACK of HNSW KNN recall at the same ef; and
+        raising the per-query EF_RUNTIME from 5 to 50 raises mean recall.
+        """
+        client = self.server.get_new_client()
+        rng = np.random.default_rng(53)
+        field = range_field(metric)
+        flat_index, hnsw_index = create_range_indexes(
+            client, metric, dim=self.DIM, ef_runtime=self.FIELD_EF)
+        vectors = clustered_vectors(rng, self.KEYS, dim=self.DIM)
+        write_vectors(client, range(self.KEYS), vectors)
+        wait_indexed([client], (flat_index, hnsw_index), timeout=600)
+        queries = scale_queries(rng, vectors, metric, count=self.QUERIES)
+
+        cells = [(n, ef) for n in self.BALL_SIZES for ef in self.QUERY_EFS]
+        range_recall = {cell: [] for cell in cells}
+        knn_recall = {cell: [] for cell in cells}
+        for query in queries:
+            for n, radius in knn_radii(client, flat_index, field, query,
+                                       sizes=self.BALL_SIZES):
+                flat = range_distances(client, flat_index, field, query,
+                                       radius)
+                assert len(flat) == n, (metric, n, radius)
+                for ef in self.QUERY_EFS:
+                    hnsw = range_distances(client, hnsw_index, field, query,
+                                           radius, ef_runtime=ef)
+                    extra = hnsw.keys() - flat.keys()
+                    assert not extra, (metric, n, ef, extra)
+                    for key, dist in hnsw.items():
+                        assert math.isclose(dist, flat[key], rel_tol=1e-5,
+                                            abs_tol=1e-5), (metric, key)
+                    range_recall[(n, ef)].append(len(hnsw) / n)
+                    knn = self.knn_keys(client, hnsw_index, field, query, n,
+                                        ef)
+                    knn_recall[(n, ef)].append(len(knn & flat.keys()) / n)
+
+        mean = lambda xs: sum(xs) / len(xs)
+        range_means = {cell: mean(r) for cell, r in range_recall.items()}
+        knn_means = {cell: mean(r) for cell, r in knn_recall.items()}
+        print(f"\n{metric} recall, range (KNN) by ball size x query "
+              f"EF_RUNTIME; field EF_RUNTIME {self.FIELD_EF}")
+        print("ball " + "".join(f"{f'ef={ef}':>16}" for ef in self.QUERY_EFS))
+        for n in self.BALL_SIZES:
+            print(f"{n:>4} " + "".join(
+                f"{range_means[(n, ef)]:>8.3f} ({knn_means[(n, ef)]:.3f})"
+                for ef in self.QUERY_EFS))
+
+        for cell in cells:
+            assert range_means[cell] >= knn_means[cell] - self.KNN_SLACK, (
+                metric, cell, range_means[cell], knn_means[cell])
+        by_ef = {ef: mean([range_means[(n, ef)] for n in self.BALL_SIZES])
+                 for ef in self.QUERY_EFS}
+        assert by_ef[50] > by_ef[5], (metric, by_ef)
+        for n in self.BALL_SIZES:
+            assert range_means[(n, 50)] >= self.WIDE_EF_MIN_RECALL, (
+                metric, n, range_means[(n, 50)])
