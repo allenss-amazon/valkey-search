@@ -44,6 +44,7 @@
 #include "src/valkey_search.h"
 #include "src/valkey_search_options.h"
 #include "valkey_search_options.h"
+#include "vmsdk/src/debug.h"
 #include "vmsdk/src/log.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/utils.h"
@@ -380,12 +381,25 @@ class RangeStopCondition : public hnswlib::BaseSearchStopCondition<float> {
       nearest_.pop();
       nearest_.push(dist);
     }
+    // DIAGNOSTIC: the walk switches from the ef beam to the shell flood once
+    // all ef nearest results are within the shell.
+    if (!flooded_ && EfFull() && nearest_.top() <= shell_) {
+      flooded_ = true;
+    }
   }
   void remove_point_from_result(hnswlib::labeltype, const void *,
                                 float) override {
     --num_results_;
   }
   bool should_stop_search(float candidate_dist, float lower_bound) override {
+    // DIAGNOSTIC: every continue expands one node.
+    const bool stop = ShouldStopSearch(candidate_dist, lower_bound);
+    if (!stop) {
+      ++expanded_;
+    }
+    return stop;
+  }
+  bool ShouldStopSearch(float candidate_dist, float lower_bound) {
     if (encountered_nan_) {
       return true;
     }
@@ -419,6 +433,8 @@ class RangeStopCondition : public hnswlib::BaseSearchStopCondition<float> {
     }
   }
   bool EncounteredNaN() const { return encountered_nan_; }
+  bool Flooded() const { return flooded_; }
+  size_t Expanded() const { return expanded_; }
 
  private:
   // Compares the count, not a distance against a sentinel: a stored vector
@@ -431,8 +447,16 @@ class RangeStopCondition : public hnswlib::BaseSearchStopCondition<float> {
   const size_t max_results_;
   size_t num_results_{0};
   bool encountered_nan_{false};
+  bool flooded_{false};
+  size_t expanded_{0};
   std::priority_queue<float> nearest_;  // The ef nearest distances, max on top.
 };
+
+// DIAGNOSTIC: HNSW range walk counters, visible with
+// search.info-developer-visible.
+TEST_COUNTER(RangeWalks);
+TEST_COUNTER(RangeFloodStarts);
+TEST_COUNTER(RangeExpandedNodes);
 
 }  // namespace
 
@@ -520,6 +544,11 @@ absl::StatusOr<std::vector<Neighbor>> VectorHNSW<T>::SearchRange(
         1, std::memory_order_relaxed);
     return absl::InternalError(e.what());
   }
+  RangeWalks.Increment(1);
+  if (stop_condition.Flooded()) {
+    RangeFloodStarts.Increment(1);
+  }
+  RangeExpandedNodes.Increment(stop_condition.Expanded());
   // A cancelled walk returns the keys in range it reached, as Search() and the
   // scan do; the reply is a timeout error unless partial results are enabled.
   const bool cancelled = cancellation_token->IsCancelled();

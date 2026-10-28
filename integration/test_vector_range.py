@@ -2426,6 +2426,15 @@ class TestVectorRangeEfRuntimeSweep(ValkeySearchTestCaseBase):
         cells = [(n, ef) for n in self.BALL_SIZES for ef in self.QUERY_EFS]
         range_recall = {cell: [] for cell in cells}
         knn_recall = {cell: [] for cell in cells}
+        # DIAGNOSTIC: per query, (flood started, nodes expanded, recall).
+        walks = {cell: [] for cell in cells}
+        client.execute_command(
+            "CONFIG", "SET", "search.info-developer-visible", "yes")
+
+        def walk_counters():
+            info = client.info("SEARCH")
+            return [info[f"search_test-counter-{name}"] for name in
+                    ("RangeWalks", "RangeFloodStarts", "RangeExpandedNodes")]
         for query in queries:
             for n, radius in knn_radii(client, flat_index, field, query,
                                        sizes=self.BALL_SIZES):
@@ -2433,8 +2442,13 @@ class TestVectorRangeEfRuntimeSweep(ValkeySearchTestCaseBase):
                                        radius)
                 assert len(flat) == n, (metric, n, radius)
                 for ef in self.QUERY_EFS:
+                    before = walk_counters()
                     hnsw = range_distances(client, hnsw_index, field, query,
                                            radius, ef_runtime=ef)
+                    delta = [a - b for a, b in zip(walk_counters(), before)]
+                    assert delta[0] == 1, delta
+                    walks[(n, ef)].append(
+                        (delta[1] == 1, delta[2], len(hnsw.keys() & flat.keys()) / n))
                     extra = hnsw.keys() - flat.keys()
                     assert not extra, (metric, n, ef, extra)
                     for key, dist in hnsw.items():
@@ -2455,6 +2469,20 @@ class TestVectorRangeEfRuntimeSweep(ValkeySearchTestCaseBase):
             print(f"{n:>4} " + "".join(
                 f"{range_means[(n, ef)]:>8.3f} ({knn_means[(n, ef)]:.3f})"
                 for ef in self.QUERY_EFS))
+
+        print(f"{metric} walk diagnostics: flood rate, mean expanded nodes, "
+              f"recall flooded / not flooded (query count)")
+        for ef in self.QUERY_EFS:
+            print(f"  ef={ef}")
+            for n in self.BALL_SIZES:
+                w = walks[(n, ef)]
+                flooded = [r for f, _, r in w if f]
+                beam = [r for f, _, r in w if not f]
+                fmt = lambda rs: (f"{mean(rs):.3f} ({len(rs):>2})" if rs
+                                  else "  -   ( 0)")
+                print(f"    ball {n:>4}: flood {len(flooded) / len(w):.2f}  "
+                      f"expanded {mean([e for _, e, _ in w]):>7.1f}  "
+                      f"recall {fmt(flooded)} / {fmt(beam)}")
 
         for cell in cells:
             assert range_means[cell] >= knn_means[cell] - self.KNN_SLACK, (
