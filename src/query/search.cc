@@ -1712,6 +1712,12 @@ absl::Status SearchAsync(std::unique_ptr<SearchParameters> parameters,
   // entirely on the main thread (see SearchInkeys). force_async keeps the
   // completion out of the caller's frame, as the thread pool would.
   if (parameters->inkeys.has_value()) {
+    // Off the main thread during shutdown RunByMain drops the callback, and
+    // the completion with it. Refuse instead, as a stopped thread pool does
+    // below, so the caller can terminate whatever waits on the search.
+    if (!vmsdk::IsMainThread() && vmsdk::IsShuttingDown()) {
+      return absl::UnavailableError(kShuttingDownMsg);
+    }
     vmsdk::RunByMain(
         [parameters = std::move(parameters), search_mode]() mutable {
           parameters->search_result.status = Search(*parameters, search_mode);
