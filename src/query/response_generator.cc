@@ -466,6 +466,13 @@ void ProcessNeighborsForReply(
   // recomputed document.
   std::unique_ptr<query::QueryContext> query_ctx;
   for (auto &neighbor : neighbors) {
+    // An INKEYS query fetches every listed key here, on the main thread; stop
+    // once it has timed out. The neighbors left without content are erased
+    // below.
+    if (parameters.inkeys.has_value() &&
+        parameters.cancellation_token->IsCancelled()) {
+      break;
+    }
     // Remote neighbors (from fanout) always have attribute_contents populated,
     // so they skip this entire block. Only local neighbors without content
     // reach the slot ownership check below.

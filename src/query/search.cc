@@ -1614,6 +1614,10 @@ absl::Status SearchInkeys(SearchParameters &parameters) {
   std::vector<indexes::Neighbor> neighbors;
   neighbors.reserve(parameters.inkeys->size());
   for (const auto &key : *parameters.inkeys) {
+    // Each key costs main-thread time; stop once the query has timed out.
+    if (parameters.cancellation_token->IsCancelled()) {
+      break;
+    }
     auto interned = StringInternStore::Intern(key);
     if (!parameters.index_schema->TryGetDbMutationSequenceNumber(interned)) {
       continue;
