@@ -227,3 +227,23 @@ class TestFTSearchInkeys(ValkeySearchTestCaseBase):
         )
         assert result[0] == 1, f"expected 1 real key, got {result[0]}"
         assert self._returned_keys(result) == {f"vdoc:{KNN_NUM_DOCS - 1}"}
+
+    def test_inkeys_knn_unusable_vector_excluded(self):
+        """A listed key the index tracks but whose vector is missing or the
+        wrong size has no distance, so it is not a nearest neighbor. It must
+        not rank first on a placeholder distance."""
+        client: Valkey = self.server.get_new_client()
+        self._setup_hnsw_index(client)
+        client.execute_command("HSET", "vdoc:novec", "score", "1")
+        client.execute_command("HSET", "vdoc:badvec", "score", "1",
+                               "vec", b"\x00\x01")
+
+        keys = ["vdoc:novec", "vdoc:badvec", f"vdoc:{KNN_NUM_DOCS - 1}"]
+        result = client.execute_command(
+            "FT.SEARCH", "vidx", "*=>[KNN 3 @vec $BLOB]",
+            "INKEYS", str(len(keys)), *keys,
+            "PARAMS", "2", "BLOB", float_to_bytes([0.0] * 4),
+            "DIALECT", "2",
+        )
+        assert self._returned_keys(result) == {f"vdoc:{KNN_NUM_DOCS - 1}"}
+        assert result[0] == 1

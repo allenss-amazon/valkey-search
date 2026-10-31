@@ -527,20 +527,27 @@ void ProcessNeighborsForReply(
                       ? std::optional(vmsdk::ToStringView(normalized.get()))
                       : std::nullopt;
         }
-        if (bytes.has_value()) {
-          auto distance =
-              vector_index->RecomputeDistance(*bytes, parameters.query);
-          if (distance.ok()) {
-            neighbor.distance = *distance;
-            // For a query ranked on the distance the two are the same number;
-            // where they are not, Neighbor.score is a relevance the distance
-            // must not overwrite.
-            if (ranks_on_distance) {
-              neighbor.score = *distance;
-            }
-            any_distance_recomputed = true;
-          }
+        auto distance =
+            bytes.has_value()
+                ? vector_index->RecomputeDistance(*bytes, parameters.query)
+                : absl::NotFoundError("No vector");
+        if (!distance.ok()) {
+          // The document no longer holds a vector the index could use
+          // (missing, unparsable, or the wrong size), so it has no distance
+          // and is not a nearest neighbor. Keeping it would rank it on a
+          // stale distance -- or, for an INKEYS candidate, on the placeholder
+          // 0, ahead of every real match. Left without content, it is erased
+          // below.
+          continue;
         }
+        neighbor.distance = *distance;
+        // For a query ranked on the distance the two are the same number;
+        // where they are not, Neighbor.score is a relevance the distance
+        // must not overwrite.
+        if (ranks_on_distance) {
+          neighbor.score = *distance;
+        }
+        any_distance_recomputed = true;
       }
     }
 
