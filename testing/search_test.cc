@@ -834,6 +834,25 @@ TEST_F(ValkeySearchTest, InkeysSkipsIndexSearch) {
   EXPECT_THAT(keys, ::testing::UnorderedElementsAre("a", "b"));
 }
 
+// A remote INKEYS request takes no lock, but must still be refused while the
+// server is out of memory, as every other remote search is.
+TEST_F(ValkeySearchTest, InkeysRemoteRejectedUnderOom) {
+  auto schema = CreateIndexSchema(kIndexSchemaName).value();
+  schema->SetDbMutationSequenceNumber(StringInternStore::Intern("a"), 5);
+
+  UnitTestSearchParameters params;
+  params.index_schema_name = kIndexSchemaName;
+  params.index_schema = schema;
+  params.dialect = kDialect;
+  params.inkeys = absl::flat_hash_set<std::string>{"a"};
+  EXPECT_CALL(*kMockValkeyModule, GetContextFlags(::testing::_))
+      .WillRepeatedly(::testing::Return(VALKEYMODULE_CTX_FLAGS_OOM));
+
+  auto status = Search(params, valkey_search::query::SearchMode::kRemote);
+  EXPECT_TRUE(absl::IsResourceExhausted(status)) << status;
+  EXPECT_TRUE(params.search_result.neighbors.empty());
+}
+
 struct FetchFilteredKeysTestCase {
   std::string test_name;
   std::string filter;

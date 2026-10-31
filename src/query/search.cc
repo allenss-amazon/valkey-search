@@ -1643,14 +1643,8 @@ absl::Status Search(SearchParameters &parameters, SearchMode search_mode) {
   if (parameters.cancellation_token->IsCancelled()) {
     return absl::OkStatus();
   }
-  if (parameters.inkeys.has_value()) {
-    return SearchInkeys(parameters);
-  }
-  auto &time_sliced_mutex = parameters.index_schema->GetTimeSlicedMutex();
-  vmsdk::ReaderMutexLock lock(&time_sliced_mutex);
-  ++Metrics::GetStats().time_slice_queries;
   // Handle OOM for search requests, defends against request
-  // coming from the coordinator
+  // coming from the coordinator. Ahead of INKEYS, which takes no lock.
   if (search_mode == SearchMode::kRemote) {
     auto ctx = vmsdk::MakeUniqueValkeyThreadSafeContext(nullptr);
     auto ctx_flags = ValkeyModule_GetContextFlags(ctx.get());
@@ -1658,6 +1652,12 @@ absl::Status Search(SearchParameters &parameters, SearchMode search_mode) {
       return absl::ResourceExhaustedError(kOOMMsg);
     }
   }
+  if (parameters.inkeys.has_value()) {
+    return SearchInkeys(parameters);
+  }
+  auto &time_sliced_mutex = parameters.index_schema->GetTimeSlicedMutex();
+  vmsdk::ReaderMutexLock lock(&time_sliced_mutex);
+  ++Metrics::GetStats().time_slice_queries;
   if (parameters.IsNonVectorQuery()) {
     // Standalone vector range queries (no KNN) are routed through a dedicated
     // path that computes and stores distances.
