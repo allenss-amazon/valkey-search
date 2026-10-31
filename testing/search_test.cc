@@ -680,8 +680,9 @@ INSTANTIATE_TEST_SUITE_P(
              std::get<1>(info.param).test_name;
     });
 
-TEST_F(ValkeySearchTest,
-       HybridPolicyTakesPriorityOverInkeysWithAndWithoutFilter) {
+// INKEYS evaluates the listed keys directly, so no policy sends it through the
+// planner: neither execution-path counter moves and no index search runs.
+TEST_F(ValkeySearchTest, InkeysIgnoresHybridPolicyWithAndWithoutFilter) {
   auto index_schema = CreateIndexSchemaWithMultipleAttributes(
       indexes::IndexerType::kHNSW, data_model::DISTANCE_METRIC_L2);
   UnitTestSearchParameters params;
@@ -697,36 +698,37 @@ TEST_F(ValkeySearchTest,
   FilterParser parser(*index_schema, "@tag:{LT5}", options);
   params.filter_parse_results = std::move(parser.Parse().value());
   params.inkeys = absl::flat_hash_set<std::string>{"0", "1"};
+  index_schema->SetDbMutationSequenceNumber(StringInternStore::Intern("0"), 1);
+  index_schema->SetDbMutationSequenceNumber(StringInternStore::Intern("1"), 1);
 
-  auto expect_inkeys_results = [&]() {
-    ASSERT_EQ(params.search_result.neighbors.size(), 2);
-    for (const auto &neighbor : params.search_result.neighbors) {
-      EXPECT_TRUE(
-          params.inkeys->contains(std::string(neighbor.external_id->Str())));
-    }
-  };
-
-  auto run_policy = [&](query::HybridPolicy policy, bool expect_prefilter) {
+  auto run_policy = [&](query::HybridPolicy policy) {
     params.hybrid_policy = policy;
     auto prefiltering_requests =
         Metrics::GetStats().query_prefiltering_requests_cnt.load();
     auto inline_filtering_requests =
         Metrics::GetStats().query_inline_filtering_requests_cnt.load();
+    auto time_slice_queries = Metrics::GetStats().time_slice_queries.load();
     VMSDK_EXPECT_OK(Search(params, query::SearchMode::kLocal));
-    expect_inkeys_results();
+    std::vector<std::string> keys;
+    for (const auto &neighbor : params.search_result.neighbors) {
+      keys.emplace_back(neighbor.external_id->Str());
+    }
+    EXPECT_THAT(keys, ::testing::UnorderedElementsAre("0", "1"));
     EXPECT_EQ(Metrics::GetStats().query_prefiltering_requests_cnt.load(),
-              prefiltering_requests + expect_prefilter);
+              prefiltering_requests);
     EXPECT_EQ(Metrics::GetStats().query_inline_filtering_requests_cnt.load(),
-              inline_filtering_requests + !expect_prefilter);
+              inline_filtering_requests);
+    EXPECT_EQ(Metrics::GetStats().time_slice_queries.load(),
+              time_slice_queries);
   };
 
   for (bool with_filter : {true, false}) {
     if (!with_filter) {
       params.filter_parse_results = FilterParseResults{};
     }
-    run_policy(query::HybridPolicy::kAuto, true);
-    run_policy(query::HybridPolicy::kBatches, false);
-    run_policy(query::HybridPolicy::kAdHocBruteForce, true);
+    run_policy(query::HybridPolicy::kAuto);
+    run_policy(query::HybridPolicy::kBatches);
+    run_policy(query::HybridPolicy::kAdHocBruteForce);
   }
 }
 
