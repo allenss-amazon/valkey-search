@@ -1,3 +1,5 @@
+# Never use time.sleep() to wait for indexing: writes are searchable
+# immediately (see README).
 import pytest, struct
 from .generate import BaseCompatibilityTest
 from .data_sets import HYBRID_VECTOR_DIM, VECTOR_DIM
@@ -90,8 +92,7 @@ class TestSearchCompatibility(BaseCompatibilityTest):
         """Text scores are computed from shard-local corpus statistics in a
         cluster, so they match the reference only on a standalone server
         (unsupported_tests.md 5.9)."""
-        self.check(*cmd)
-        self.answers[-1]["cluster_excluded"] = True
+        self.execute_command([*cmd], excluded_cluster_only=True)
 
     def test_inkeys_withscores(self, key_type, dialect):
         self.setup_data("hybrid text", key_type)
