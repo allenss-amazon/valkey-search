@@ -84,6 +84,16 @@ class TestSearchCompatibility(BaseCompatibilityTest):
         self.check("ft.search", f"{key_type}_idx1", "@n1:[-3 5]", "INKEYS", "6", *keys[:5], "nonexistent:99", "NOCONTENT", "LIMIT", "0", "2", "SORTBY", "n1", "ASC", "DIALECT", str(dialect))
 
 
+    def test_inkeys_empty_page(self, key_type, dialect):
+        # An empty page still reports how many listed keys match: keys[:5]
+        # hold n1 -5..-1, so @n1:[-3 5] matches three of them.
+        keys = [entry[0] for entry in self.setup_data("sortable numbers", key_type)]
+        inkeys = ["INKEYS", "6", *keys[:5], "nonexistent:99"]
+        self.check("ft.search", f"{key_type}_idx1", "@n1:[-3 5]", *inkeys, "LIMIT", "0", "0", "DIALECT", str(dialect))
+        blob = struct.pack(f"<{VECTOR_DIM}f", *([0.0] * VECTOR_DIM))
+        for knn, limit in [("3", ["0", "0"]), ("3", ["3", "2"]), ("2", ["0", "10"])]:
+            self.check("ft.search", f"{key_type}_idx1", f"@n1:[-3 5]=>[KNN {knn} @v1 $BLOB]", *inkeys, "LIMIT", *limit, "PARAMS", "2", "BLOB", blob, "DIALECT", str(dialect))
+
     def inkeys(self, key_type, *ids):
         keys = [f"{key_type}:{i:02d}" for i in ids]
         return ["INKEYS", str(len(keys)), *keys]

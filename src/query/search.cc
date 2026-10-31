@@ -1626,9 +1626,12 @@ absl::Status SearchInkeys(SearchParameters &parameters) {
     neighbor.sequence_number = kUnverifiedSequenceNumber;
     neighbors.push_back(std::move(neighbor));
   }
-  size_t total_count = neighbors.size();
-  parameters.search_result =
-      SearchResult(total_count, std::move(neighbors), parameters);
+  // Not through the SearchResult constructor: for an empty page (LIMIT 0 0, or
+  // a KNN offset at or past k) it drops every candidate, so none would be
+  // verified and total_count would count keys that do not match.
+  parameters.search_result = SearchResult();
+  parameters.search_result.total_count = neighbors.size();
+  parameters.search_result.neighbors = std::move(neighbors);
   return absl::OkStatus();
 }
 
