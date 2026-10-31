@@ -247,3 +247,32 @@ class TestFTSearchInkeys(ValkeySearchTestCaseBase):
         )
         assert self._returned_keys(result) == {f"vdoc:{KNN_NUM_DOCS - 1}"}
         assert result[0] == 1
+
+    def test_inkeys_match_all_withscores(self):
+        """`*` has no predicate to verify, but its relevance score (which
+        depends on document length) must still be computed for INKEYS
+        candidates, matching the same query without INKEYS."""
+        client: Valkey = self.server.get_new_client()
+        client.execute_command(
+            "FT.CREATE", "tidx", "ON", "HASH", "PREFIX", "1", "tdoc:",
+            "SCHEMA", "title", "TEXT",
+        )
+        client.execute_command("HSET", "tdoc:a", "title",
+                               "alpha beta gamma delta epsilon zeta eta")
+        client.execute_command("HSET", "tdoc:b", "title", "alpha")
+        client.execute_command("HSET", "tdoc:c", "title", "alpha beta gamma")
+
+        def scores(*extra):
+            result = client.execute_command(
+                "FT.SEARCH", "tidx", "*", *extra,
+                "WITHSCORES", "NOCONTENT", "DIALECT", "2",
+            )
+            return {result[i].decode(): float(result[i + 1])
+                    for i in range(1, len(result), 2)}
+
+        expected = scores()
+        assert all(score > 0 for score in expected.values()), expected
+        actual = scores("INKEYS", "3", "tdoc:a", "tdoc:b", "tdoc:c")
+        assert actual.keys() == expected.keys()
+        for key, score in expected.items():
+            assert actual[key] == pytest.approx(score), (key, actual, expected)

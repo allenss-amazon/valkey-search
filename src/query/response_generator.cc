@@ -183,7 +183,14 @@ FilterVerification VerifyFilter(const query::SearchParameters &parameters,
                                 std::unique_ptr<QueryContext> &query_ctx,
                                 std::optional<bool> recompute_score_override) {
   auto predicate = parameters.filter_parse_results.root_predicate.get();
-  if (predicate == nullptr) {
+  // A query whose Neighbor.score is a KNN distance rather than a relevance
+  // score is not rescored: by default that means a vector query without a
+  // scored predicate (or with vector_score_only), and FT.HYBRID overrides the
+  // choice per arm.
+  const bool recompute_score =
+      recompute_score_override.value_or(parameters.ScoreIsRelevance());
+  // Match-all has nothing to verify, only a score to refresh.
+  if (predicate == nullptr && !recompute_score) {
     return {true, std::nullopt};
   }
   auto db_seq =
@@ -203,12 +210,21 @@ FilterVerification VerifyFilter(const query::SearchParameters &parameters,
   predicate_revalidation.Increment();
 
   const IndexSchema &index_schema = *parameters.index_schema;
+  // nullopt (empty corpus / non-match) degrades to 0 rather than dropping the
+  // already-admitted document.
+  auto recompute = [&]() {
+    return RecomputeDocumentScore(predicate, n.external_id, *query_ctx, records)
+        .value_or(0.0f);
+  };
   // One context per reply: leaves resolve on the first mutated document and are
   // reused for the rest.
   if (!query_ctx) {
     query_ctx = std::make_unique<QueryContext>(
         index_schema, indexes::scoring::GetScorer(parameters.scorer),
         LockMode::kShortLocks);
+  }
+  if (predicate == nullptr) {
+    return {true, recompute()};
   }
   PredicateEvaluator evaluator(records, n.external_id, *query_ctx,
                                parameters.filter_parse_results.query_operations,
@@ -217,20 +233,11 @@ FilterVerification VerifyFilter(const query::SearchParameters &parameters,
 
   // The document changed between shard-side scoring and this content fetch, so
   // its carried Neighbor.score is stale; recompute it through the same Scorer
-  // seam ScoreTextQuery uses. A query whose Neighbor.score is a KNN distance
-  // rather than a relevance score is skipped: by default that means a vector
-  // query without a scored predicate (or with vector_score_only), and FT.HYBRID
-  // overrides the choice per arm.
-  const bool recompute_score =
-      recompute_score_override.value_or(parameters.ScoreIsRelevance());
+  // seam ScoreTextQuery uses.
   if (!result.matches || !recompute_score) {
     return {result.matches, std::nullopt};
   }
-  // nullopt (empty corpus / non-match) degrades to 0 rather than dropping the
-  // already-admitted document.
-  result.score =
-      RecomputeDocumentScore(predicate, n.external_id, *query_ctx, records)
-          .value_or(0.0f);
+  result.score = recompute();
   return {true, result.score};
 }
 
@@ -308,7 +315,13 @@ absl::StatusOr<RecordsMap> GetContent(
                          attribute_data_type.FetchAllAttributes(
                              ctx, vector_identifier, key_obj.get(),
                              neighbor.external_id->Str(), identifiers));
-  if (!parameters.filter_parse_results.filter_identifiers.empty()) {
+  // Match-all has no filter identifiers, but an INKEYS candidate still needs
+  // its relevance score computed. Only for INKEYS: other callers without a
+  // predicate (FT.HYBRID's fused rows, say) carry a score that is not a
+  // match-all relevance.
+  if (!parameters.filter_parse_results.filter_identifiers.empty() ||
+      (parameters.filter_parse_results.root_predicate == nullptr &&
+       parameters.inkeys.has_value() && parameters.ScoreIsRelevance())) {
     auto verification = VerifyFilter(parameters, content, neighbor, query_ctx);
     if (!verification.matches) {
       return absl::NotFoundError("Verify filter failed");
